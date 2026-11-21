@@ -43,17 +43,41 @@ operates its apps for you, in the background, with your own model and keys.
 
 ## Features
 
+**Agent**
+
 - **Fork of Dextop**: all [Dextop](https://github.com/NarYuki/Dextop) features, with an AI agent built in.
+- **AI agent harness**: can run the agent on [omp](https://github.com/can1357/oh-my-pi), made Android-compatible,
+  under the hood to drive it on Android more effectively.
 - **Desktop and phone**: the agent works on the virtual desktop in the background or on the phone screen; commands
   such as "open Maps on the desktop" or "launch WhatsApp on the phone" pick the right screen.
-- **Fast native control**: precise taps, long presses, swipes, scrolling and right-clicks, app launching, and ADB
-  shell access, so the agent can also install and remove apps.
-- **System instructions**: standing instructions the agent follows in every task.
-- **MCP**: connect remote MCP servers as extra tools.
+- **Fast native control**: precise taps, long presses, swipes, scrolling and right-clicks, and app launching.
+- **ADB shell**: the agent runs shell commands with ADB rights, so it can also install and remove apps.
+- **Built-in tools**: web search and page reading, calendar, alarms and timers, weather, clipboard and notifications.
+- **Instructions, rules and memory**: standing instructions for every task, rules per app, and memories the agent
+  saves and recalls.
 - **Skills**: add skills by hand or sync them from a GitHub repository.
-- **Same setup in Termux**: Backstage ships the [omp](https://github.com/can1357/oh-my-pi) coding agent. Pair Termux
-  once, type `omp`, and it uses the same AI provider and key as Backstage, no second setup. The Backstage agent can
-  also hand coding tasks to omp itself.
+- **Safety approvals**: sensitive actions wait for your OK; plan mode shows the plan before the agent acts.
+
+**Automation**
+
+- **Scheduled tasks**: run tasks at set times from the Automate tab; the agent can also schedule them itself.
+- **Tasker, MacroDroid and broadcasts**: start tasks from your automation apps or any Android broadcast.
+- **Voice**: speak tasks, hear the replies, and wake the agent with an on-device wake word.
+- **Always at hand**: a floating chat bubble, a Quick Settings tile and notification actions.
+
+**Connections**
+
+- **MCP client**: connect remote MCP servers as extra tools.
+- **MCP server**: let MCP clients on your computer drive the phone and desktop through Backstage. Off until you
+  switch it on.
+- **Same setup in Termux**: Backstage ships the omp coding agent. Pair Termux once, type `omp`, and it uses the same
+  AI provider and key as Backstage, no second setup. The Backstage agent can also hand coding tasks to omp itself.
+
+**Desktop and app**
+
+- **Desktop popup**: show the desktop as a picture-in-picture window, or keep it running in the background, also
+  while the phone is locked if you allow it (its apps are then usable without unlocking).
+- **Updates and backup**: in-app updates, and settings export and restore.
 
 ## Installation
 
