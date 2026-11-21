@@ -7,7 +7,7 @@
 Run an AI agent in the background on Android, on its own virtual desktop, while you use your phone.
 
 [![release](https://img.shields.io/github/v/release/TheEggmanEmpire/Backstage?color=brightgreen&logo=github&label=release)](https://github.com/TheEggmanEmpire/Backstage/releases/latest)
-[![Android](https://img.shields.io/badge/Android-13%2B-3DDC84?logo=android&logoColor=white)](#install)
+[![Android](https://img.shields.io/badge/Android-13%2B-3DDC84?logo=android&logoColor=white)](#installation)
 [![license](https://img.shields.io/badge/license-GPL--3.0-orange?logo=gnu&logoColor=white)](LICENSE)
 
 <a href="https://github.com/TheEggmanEmpire/Backstage/releases/latest"><img src="https://raw.githubusercontent.com/Kunzisoft/Github-badge/main/get-it-on-github.png" width="260" alt="Get it on GitHub"></a>
@@ -19,6 +19,27 @@ Run an AI agent in the background on Android, on its own virtual desktop, while 
 
 Backstage runs a full desktop ([Dextop](https://github.com/NarYuki/Dextop)) on your phone and an AI agent that
 operates its apps for you, in the background, with your own model and keys.
+
+## Screenshots
+
+<table>
+  <tr>
+    <th>Backstage app</th><th>Background popup</th><th>In-app chat</th><th>In-app agent work</th>
+  </tr>
+  <tr>
+    <td><a href="https://raw.githubusercontent.com/TheEggmanEmpire/Backstage/main/docs/screenshots/Backstage_screenshot_1.jpg"><img src="docs/screenshots/Backstage_screenshot_1.jpg" width="200" alt="Backstage app"></a></td>
+    <td><a href="https://raw.githubusercontent.com/TheEggmanEmpire/Backstage/main/docs/screenshots/Backstage_screenshot_2.jpg"><img src="docs/screenshots/Backstage_screenshot_2.jpg" width="200" alt="Background popup"></a></td>
+    <td><a href="https://raw.githubusercontent.com/TheEggmanEmpire/Backstage/main/docs/screenshots/Backstage_screenshot_3.jpg"><img src="docs/screenshots/Backstage_screenshot_3.jpg" width="200" alt="In-app chat"></a></td>
+    <td><a href="https://raw.githubusercontent.com/TheEggmanEmpire/Backstage/main/docs/screenshots/Backstage_screenshot_4.jpg"><img src="docs/screenshots/Backstage_screenshot_4.jpg" width="200" alt="In-app agent work"></a></td>
+  </tr>
+  <tr>
+    <th colspan="2">In-app, unfolded view</th><th colspan="2">Backstage in action</th>
+  </tr>
+  <tr>
+    <td colspan="2"><a href="https://raw.githubusercontent.com/TheEggmanEmpire/Backstage/main/docs/screenshots/Backstage_screenshot_5.jpg"><img src="docs/screenshots/Backstage_screenshot_5.jpg" width="410" alt="In-app, unfolded view"></a></td>
+    <td colspan="2"><a href="https://raw.githubusercontent.com/TheEggmanEmpire/Backstage/main/docs/screenshots/Backstage_screenshot_6.jpg"><img src="docs/screenshots/Backstage_screenshot_6.jpg" width="410" alt="Backstage in action"></a></td>
+  </tr>
+</table>
 
 ## Features
 
@@ -34,6 +55,7 @@ operates its apps for you, in the background, with your own model and keys.
   once, type `omp`, and it uses the same AI provider and key as Backstage, no second setup. The Backstage agent can
   also hand coding tasks to omp itself.
 
+## Installation
 
 Android 13+, arm64.
 
@@ -66,28 +88,6 @@ For the virtual desktop, Backstage follows the [Dextop](https://github.com/NarYu
 | Device | Status |
 |---|---|
 | Samsung Galaxy Z Fold8 | Fully supported |
-
-
-## Screenshots
-
-<table>
-  <tr>
-    <th>Backstage app</th><th>Background popup</th><th>In-app chat</th><th>In-app agent work</th>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/Backstage_screenshot_1.jpg" width="200" alt="Backstage app"></td>
-    <td><img src="docs/screenshots/Backstage_screenshot_2.jpg" width="200" alt="Background popup"></td>
-    <td><img src="docs/screenshots/Backstage_screenshot_3.jpg" width="200" alt="In-app chat"></td>
-    <td><img src="docs/screenshots/Backstage_screenshot_4.jpg" width="200" alt="In-app agent work"></td>
-  </tr>
-  <tr>
-    <th colspan="2">In-app, unfolded view</th><th colspan="2">Backstage in action</th>
-  </tr>
-  <tr>
-    <td colspan="2"><img src="docs/screenshots/Backstage_screenshot_5.jpg" width="410" alt="In-app, unfolded view"></td>
-    <td colspan="2"><img src="docs/screenshots/Backstage_screenshot_6.jpg" width="410" alt="Backstage in action"></td>
-  </tr>
-</table>
 
 ## Feedback
 
