@@ -15,6 +15,7 @@ This repository is public. Commit only code, build files, tests and the user-fac
 - Tracked files never point at local-only docs.
 - Never commit signing keys, passwords, tokens, or material derived from other apps.
 - Before every commit: check `git status` for new `.md` files and new files outside code; ask the user if unsure.
+- Commit on `main` only, no other branches, and push every commit to `origin main` right away.
 
 ## Code, comments and tests
 
