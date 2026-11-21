@@ -1,0 +1,402 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TheEggmanEmpire <backstage@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 12:00:00 +0000
+Subject: [PATCH] no-google-sdks
+
+Remove Firebase Analytics and Google Play Core dependencies and initialization. Keep the desktop Cast client and align update checks and dependency tests with the shipped components.
+---
+ android/app/build.gradle.kts             |  4 --
+ android/app/src/main/AndroidManifest.xml |  3 -
+ android/settings.gradle.kts              |  1 -
+ lib/analytics_service.dart               | 41 ++-----------
+ lib/home_screen.dart                     | 78 ++----------------------
+ lib/main.dart                            |  1 -
+ pubspec.lock                             | 64 -------------------
+ pubspec.yaml                             |  3 -
+ test/backstage_no_google_sdks_test.dart  | 55 +++++++++++++++++
+ 9 files changed, 66 insertions(+), 184 deletions(-)
+ create mode 100644 test/backstage_no_google_sdks_test.dart
+
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index fd5187017eb4a2cfce99deef6880c96425915577..364140f60fd4b9849038aad9508ed302fc54411f 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -6,10 +6,6 @@ plugins {
+     id("dev.flutter.flutter-gradle-plugin")
+ }
+ 
+-if (file("google-services.json").exists()) {
+-    apply(plugin = "com.google.gms.google-services")
+-}
+-
+ val releaseEnvironment = mutableMapOf<String, String>()
+ val environmentFile = rootProject.file("../.env")
+ if (environmentFile.exists()) {
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index fbdc96cdb25c9035afb0221b7b2ced43f866bf27..fb1befb16c41f0e755fcfb0e1fae13549faf54ec 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -44,9 +44,6 @@
+         android:icon="@mipmap/ic_launcher">
+         <service android:name=".linux.LinuxRuntimeService" android:exported="false"
+             android:process=":linux_runtime" />
+-        <meta-data
+-            android:name="google_analytics_automatic_screen_reporting_enabled"
+-            android:value="false" />
+         <meta-data
+             android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+             android:value="moe.n4tsu.dextop.DextopCastOptionsProvider" />
+diff --git a/android/settings.gradle.kts b/android/settings.gradle.kts
+index d446cb0d9c208416e5c56f57796c45336ecac1b9..56664e33e8b2b08d21263b614698e84bd74d7c35 100644
+--- a/android/settings.gradle.kts
++++ b/android/settings.gradle.kts
+@@ -22,7 +22,6 @@ plugins {
+     id("com.android.application") version "8.11.1" apply false
+     id("org.jetbrains.kotlin.android") version "2.2.20" apply false
+     id("org.jetbrains.kotlin.plugin.compose") version "2.2.20" apply false
+-    id("com.google.gms.google-services") version "4.4.4" apply false
+ }
+ 
+ include(":app")
+diff --git a/lib/analytics_service.dart b/lib/analytics_service.dart
+index 10346fcf15da1a683ec5a3784cd5889bdf57c9cc..fa4deea5491a3e0c59b5c031bb9df8d8f40d9def 100644
+--- a/lib/analytics_service.dart
++++ b/lib/analytics_service.dart
+@@ -1,39 +1,10 @@
+-import 'package:firebase_analytics/firebase_analytics.dart';
+-import 'package:firebase_core/firebase_core.dart';
+-
++// Backstage (patch no-google-sdks): this build links no Firebase / Google Analytics SDK and collects no analytics.
++// The call sites keep using this API; every method is a no-op that never reaches the network.
+ abstract final class AppAnalytics {
+-  static FirebaseAnalytics? _analytics;
+-
+-  static Future<void> initialize() async {
+-    try {
+-      await Firebase.initializeApp();
+-      _analytics = FirebaseAnalytics.instance;
+-      await _analytics?.setAnalyticsCollectionEnabled(true);
+-    } catch (_) {}
+-  }
++  static Future<void> initialize() async {}
+ 
+-  static Future<void> screen(String name) async {
+-    await _analytics?.logEvent(
+-      name: 'screen_view',
+-      parameters: {
+-        'firebase_screen': name,
+-        'firebase_screen_class': 'DextopScreen',
+-      },
+-    );
+-  }
++  static Future<void> screen(String name) async {}
+ 
+-  static Future<void> event(String name, [Map<String, Object>? parameters]) {
+-    // Firebase accepts only strings and numbers. Keep call sites expressive while
+-    // normalizing flags here so analytics can never interrupt a user action.
+-    final normalized = parameters?.map((key, value) {
+-      final Object safeValue = switch (value) {
+-        bool flag => flag ? 1 : 0,
+-        String() || num() => value,
+-        _ => value.toString(),
+-      };
+-      return MapEntry(key, safeValue);
+-    });
+-    return _analytics?.logEvent(name: name, parameters: normalized) ??
+-        Future.value();
+-  }
++  static Future<void> event(String name, [Map<String, Object>? parameters]) =>
++      Future.value();
+ }
+diff --git a/lib/home_screen.dart b/lib/home_screen.dart
+index d29cc378d70fe7903f8066ee25af7792a30697f4..cb9eda30687b1830df4d130f11f965b415521b91 100644
+--- a/lib/home_screen.dart
++++ b/lib/home_screen.dart
+@@ -355,7 +355,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+   String? latestReleaseUrl;
+   String? releaseCheckError;
+   DateTime? releaseCheckedAt;
+-  AppUpdateInfo? playUpdateInfo;
+   bool get updateAvailable => latestReleaseVersion != null;
+   var secureSettingsGranted = false;
+   String? error;
+@@ -687,46 +686,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+     }
+   }
+ 
+-  Future<void> _checkForUpdates({bool manual = false}) => isPlayDistribution
+-      ? _checkPlayStoreUpdate(manual: manual)
+-      : _checkLatestGitHubRelease(manual: manual);
+-
+-  Future<void> _checkPlayStoreUpdate({bool manual = false}) async {
+-    if (releaseChecking) return;
+-    mutate(() {
+-      releaseChecking = true;
+-      releaseCheckSucceeded = false;
+-      releaseCheckError = null;
+-    });
+-    try {
+-      final info = await InAppUpdate.checkForUpdate();
+-      final available =
+-          info.updateAvailability == UpdateAvailability.updateAvailable;
+-      if (!mounted) return;
+-      mutate(() {
+-        playUpdateInfo = available ? info : null;
+-        latestReleaseVersion = available
+-            ? info.availableVersionCode.toString()
+-            : null;
+-        latestReleaseUrl = null;
+-        fetchedReleaseVersion = latestReleaseVersion;
+-        releaseCheckedAt = DateTime.now();
+-        releaseCheckSucceeded = true;
+-      });
+-      if (manual && updateAvailable) await _showUpdateDialog();
+-    } catch (error) {
+-      if (!mounted) return;
+-      mutate(() {
+-        playUpdateInfo = null;
+-        latestReleaseVersion = null;
+-        releaseCheckSucceeded = false;
+-        releaseCheckError = '$error';
+-        releaseCheckedAt = DateTime.now();
+-      });
+-    } finally {
+-      if (mounted) mutate(() => releaseChecking = false);
+-    }
+-  }
++  // Backstage ships no Google Play Core: every build checks this repository's GitHub releases.
++  Future<void> _checkForUpdates({bool manual = false}) =>
++      _checkLatestGitHubRelease(manual: manual);
+ 
+   Future<void> _showUpdateDialog() async {
+     if (!updateAvailable) return;
+@@ -735,15 +697,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+       context: context,
+       builder: (dialogContext) => AlertDialog(
+         icon: const Icon(Icons.system_update_alt_rounded),
+-        title: Text(
+-          isPlayDistribution
+-              ? currentLocalizations().playUpdateAvailableTitle
+-              : l.updateAvailableTitle,
+-        ),
++        title: Text(l.updateAvailableTitle),
+         content: Text(
+-          isPlayDistribution
+-              ? currentLocalizations().playUpdateAvailableDescription
+-              : '${l.currentVersion}: $appVersion\n${l.latestVersion}: $latestReleaseVersion',
++          '${l.currentVersion}: $appVersion\n${l.latestVersion}: $latestReleaseVersion',
+         ),
+         actions: [
+           TextButton(
+@@ -758,35 +714,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+               },
+               child: Text(l.openOnGitHub),
+             ),
+-          if (isPlayDistribution && playUpdateInfo != null)
+-            FilledButton(
+-              onPressed: () async {
+-                Navigator.pop(dialogContext);
+-                await _startPlayStoreUpdate();
+-              },
+-              child: Text(currentLocalizations().updateNow),
+-            ),
+         ],
+       ),
+     );
+   }
+ 
+-  Future<void> _startPlayStoreUpdate() async {
+-    final info = playUpdateInfo;
+-    if (info == null) return;
+-    try {
+-      if (info.immediateUpdateAllowed) {
+-        await InAppUpdate.performImmediateUpdate();
+-      } else if (info.flexibleUpdateAllowed) {
+-        await InAppUpdate.startFlexibleUpdate();
+-        await InAppUpdate.completeFlexibleUpdate();
+-      }
+-    } catch (error) {
+-      if (!mounted) return;
+-      mutate(() => releaseCheckError = '$error');
+-    }
+-  }
+-
+   bool _isNewerVersion(String candidate, String current) {
+     List<int> parts(String value) {
+       final normalized = value.split('-').first.split('+').first;
+diff --git a/lib/main.dart b/lib/main.dart
+index 7414a881984ad5123929d5be5ed8c2f160264b0b..c0a8bf531e652ffb15cf26e3e7a783e697be982b 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -17,7 +17,6 @@ import 'package:free_dextop/linux/linux_expressive.dart';
+ import 'package:free_dextop/penguin_icon.dart';
+ import 'package:free_dextop/setup_page.dart';
+ import 'package:free_dextop/embedded_binder_setup.dart';
+-import 'package:in_app_update/in_app_update.dart';
+ import 'package:shared_preferences/shared_preferences.dart';
+ import 'package:archive/archive.dart';
+ import 'package:file_picker/file_picker.dart';
+diff --git a/pubspec.lock b/pubspec.lock
+index 2bc8af3a1241e3bcdea8367d46368ddd98ebed81..d0cf95debcabf8d445d93c4ee13a73cb3462ce2c 100644
+--- a/pubspec.lock
++++ b/pubspec.lock
+@@ -1,14 +1,6 @@
+ # Generated by pub
+ # See https://dart.dev/tools/pub/glossary#lockfile
+ packages:
+-  _flutterfire_internals:
+-    dependency: transitive
+-    description:
+-      name: _flutterfire_internals
+-      sha256: "6727cf2ced9b104abca9daa278380be2eca2b98ce33d4b46f11708e387dc6b4d"
+-      url: "https://pub.dev"
+-    source: hosted
+-    version: "1.3.76"
+   archive:
+     dependency: "direct main"
+     description:
+@@ -161,54 +153,6 @@ packages:
+       url: "https://pub.dev"
+     source: hosted
+     version: "10.3.10"
+-  firebase_analytics:
+-    dependency: "direct main"
+-    description:
+-      name: firebase_analytics
+-      sha256: a139dd0ada1c6e0ffd77bfdb877ac9061ffdec7c415e3e06113bdf8844db771f
+-      url: "https://pub.dev"
+-    source: hosted
+-    version: "12.4.6"
+-  firebase_analytics_platform_interface:
+-    dependency: transitive
+-    description:
+-      name: firebase_analytics_platform_interface
+-      sha256: "448c319ea895da002e43892c7d3f15dccbc3c4c3b81d3e307e37da885ea52bdf"
+-      url: "https://pub.dev"
+-    source: hosted
+-    version: "6.0.6"
+-  firebase_analytics_web:
+-    dependency: transitive
+-    description:
+-      name: firebase_analytics_web
+-      sha256: "67f287a0df75f27eafdd4a66a41e44f232c3aba713ea4794a1159893665a8bf5"
+-      url: "https://pub.dev"
+-    source: hosted
+-    version: "0.6.1+12"
+-  firebase_core:
+-    dependency: "direct main"
+-    description:
+-      name: firebase_core
+-      sha256: "9478ca6700c02d315c6aba37e206e612317f98bb4f335bb1cbd6e0ce67dcf764"
+-      url: "https://pub.dev"
+-    source: hosted
+-    version: "4.13.0"
+-  firebase_core_platform_interface:
+-    dependency: transitive
+-    description:
+-      name: firebase_core_platform_interface
+-      sha256: e28f9afdcb5b0f0a8ea74ea3b322f5a7592c81cb45dd9d189913bdae08a2089a
+-      url: "https://pub.dev"
+-    source: hosted
+-    version: "8.1.0"
+-  firebase_core_web:
+-    dependency: transitive
+-    description:
+-      name: firebase_core_web
+-      sha256: f471a288b0101a45567548322ac4a5ad31e3ecbf87a576dcc0e424e6a11e04ea
+-      url: "https://pub.dev"
+-    source: hosted
+-    version: "3.10.0"
+   fixnum:
+     dependency: transitive
+     description:
+@@ -261,14 +205,6 @@ packages:
+       url: "https://pub.dev"
+     source: hosted
+     version: "2.0.2"
+-  in_app_update:
+-    dependency: "direct main"
+-    description:
+-      name: in_app_update
+-      sha256: "9924a3efe592e1c0ec89dda3683b3cfec3d4cd02d908e6de00c24b759038ddb1"
+-      url: "https://pub.dev"
+-    source: hosted
+-    version: "4.2.5"
+   intl:
+     dependency: "direct main"
+     description:
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 4777d50950bbc3e671a8369c906e7ae66202dbff..b46f1771934de727e239c4bdeae6cfe90e694ab1 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -15,9 +15,6 @@ dependencies:
+   intl: any
+   cupertino_icons: ^1.0.8
+   shared_preferences: ^2.5.5
+-  firebase_core: ^4.2.1
+-  firebase_analytics: ^12.0.4
+-  in_app_update: ^4.2.5
+   archive: ^4.0.7
+   file_picker: ^10.3.3
+   share_plus: ^12.0.1
+diff --git a/test/backstage_no_google_sdks_test.dart b/test/backstage_no_google_sdks_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..79b326e629086087cb4a000de64f474fba65bd96
+--- /dev/null
++++ b/test/backstage_no_google_sdks_test.dart
+@@ -0,0 +1,55 @@
++// Backstage (patch no-google-sdks): the app links no Firebase, Google Analytics or Google Play Core SDK.
++import 'dart:io';
++
++import 'package:flutter_test/flutter_test.dart';
++import 'package:free_dextop/analytics_service.dart';
++
++void main() {
++  test('analytics calls complete without any SDK behind them', () async {
++    await AppAnalytics.initialize();
++    await AppAnalytics.screen('home');
++    await AppAnalytics.event('desktop_start', {'mode': 'mini', 'secure': true});
++  });
++
++  test('no closed-source Google SDK package is a dependency', () {
++    // An upstream update that adds one back must fail here, not ship silently.
++    final pubspec = File('pubspec.yaml').readAsStringSync();
++    final lock = File('pubspec.lock').readAsStringSync();
++    for (final package in [
++      'firebase_core',
++      'firebase_analytics',
++      'firebase_crashlytics',
++      'firebase_messaging',
++      'in_app_update',
++      'in_app_review',
++      'google_mobile_ads',
++    ]) {
++      expect(
++        RegExp('^\\s+$package:', multiLine: true).hasMatch(pubspec),
++        isFalse,
++        reason: '$package in pubspec.yaml',
++      );
++      expect(
++        RegExp('^  $package:', multiLine: true).hasMatch(lock),
++        isFalse,
++        reason: '$package in pubspec.lock',
++      );
++    }
++    expect(lock.contains('_flutterfire_internals'), isFalse);
++  });
++
++  test('the Android build applies no google-services plugin', () {
++    for (final path in [
++      'android/settings.gradle.kts',
++      'android/app/build.gradle.kts',
++    ]) {
++      expect(
++        File(path)
++            .readAsStringSync()
++            .contains('com.google.gms.google-services'),
++        isFalse,
++        reason: path,
++      );
++    }
++  });
++}

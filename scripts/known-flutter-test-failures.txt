@@ -1,0 +1,6 @@
+# Upstream Dextop `flutter test` cases that already fail on the PRISTINE pinned upstream
+# (snapshot 5402d091975c, Flutter 3.47.7; unpatched upstream test suite).
+# scripts/test.sh fails only on failures NOT listed here. Format: "<test file>: <full test name>".
+# Remove entries when scripts/test.sh reports a successful test.
+test/linux_privilege_test.dart: unavailable access guides users to built-in setup and refreshes afterwards
+test/linux_setup_page_test.dart: walks through choices and sends the selected options to installation

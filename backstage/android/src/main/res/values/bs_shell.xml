@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Labels copied from Dextop lib/l10n/app_en.arb; keep in sync on upstream bumps. -->
+    <string name="bs_nav_home">Home</string>
+    <string name="bs_nav_linux">Linux</string>
+    <string name="bs_nav_settings">Settings</string>
+</resources>

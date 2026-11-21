@@ -1,0 +1,466 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Library manifest: merged into Dextop's app manifest (or used standalone). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Agent, MCP, accessibility and privileged-operation permissions. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Locked mode: wake only the desktop's own display group (ACQUIRE_CAUSES_WAKEUP on a per-display wake lock) when it
+         fell asleep between tasks. An app-op permission, granted through the privileged shell (appops set). -->
+    <uses-permission
+        android:name="android.permission.TURN_SCREEN_ON"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- Device-control tools: each one is offered only after the user grants its permission. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <!-- Granted through the privileged shell (pm grant) to toggle the app's accessibility service; ignored otherwise. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- Detector pause (DetectorPause): is the detector still in front at the next tick? An app-op granted by the
+         privileged setup like the ones above; without it the pause still ends, at the 60 s cap. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- Shizuku client (standalone/phone-only builds; Dextop declares the same). -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <package android:name="moe.shizuku.privileged.api" />
+    </queries>
+
+    <!-- User-interface permissions. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Queries: speech recogniser + TTS engines (package visibility) -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+    <!-- / queries -->
+
+    <!-- default apps (exec/DefaultApps.kt): every probe intent, so the defaults resolve with package visibility
+         even without QUERY_ALL_PACKAGES. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.ASSIST" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VOICE_COMMAND" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.STILL_IMAGE_CAMERA" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="audio/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="image/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" android:host="com.android.calendar" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" android:host="com.android.contacts" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SHOW_ALARMS" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.CREATE_NOTE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_BROWSER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_MESSAGING" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_EMAIL" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_MAPS" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_MUSIC" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_FILES" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_GALLERY" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_CALENDAR" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_CONTACTS" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_CALCULATOR" />
+        </intent>
+    </queries>
+    <!-- /default apps -->
+
+    <!-- cleartext HTTP is needed for Ollama / custom endpoints on the LAN. -->
+    <application android:usesCleartextTraffic="true">
+
+        <!--  components BEGIN -->
+        <provider
+            android:name="com.eggman.backstage.init.BackstageInitProvider"
+            android:authorities="${applicationId}.backstage-init"
+            android:exported="false"
+            android:initOrder="1000" />
+
+        <!-- No accessibility service here: the app has ONE, Dextop's MirrorService (desktop engine), configured with
+             what the agent needs by backstage/overlay/res/xml/mirror_accessibility_service.xml; the glue forwards it to
+             com.eggman.backstage.a11y.AccessibilityBridge. scripts/lib/verify_apk.py fails if a second one appears. -->
+
+        <service
+            android:name="com.eggman.backstage.agent.AgentService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-device AI agent: runs user-requested app automation tasks and an optional local MCP server for the user's own AI clients" />
+        </service>
+
+        <activity
+            android:name="com.eggman.backstage.mcp.WakeScreenActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:turnScreenOn="true" />
+        <!--  components END -->
+
+        <!--  components -->
+        <!-- Agent app = the Agent tab of Backstage. NOT a launcher entry: the one launcher icon "Backstage" is Dextop's
+             launcher (Home), whose "Agent" destination opens this activity in the same task (taskAffinity.phone, like
+             Dextop's MainActivity). Still exported for its deep link (UI-only), share target and text selection.
+             scripts/lib/verify_apk.py fails if it becomes a launcher again. -->
+        <activity
+            android:name="com.eggman.backstage.ui.AgentScreenActivity"
+            android:exported="true"
+            android:label="@string/bs_agent_label"
+            android:icon="@mipmap/bs_ic_launcher"
+            android:roundIcon="@mipmap/bs_ic_launcher"
+            android:theme="@style/Theme.Backstage.Agent"
+            android:launchMode="singleTop"
+            android:taskAffinity="${applicationId}.phone"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="backstage" android:host="agent" />
+            </intent-filter>
+            <intent-filter android:label="@string/bs_share_label">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter android:label="@string/bs_process_text_label">
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!-- Digital assistant entry (long-press power / assist gesture): floating panel with mic, or the app. -->
+        <activity
+            android:name="com.eggman.backstage.entry.AssistEntryActivity"
+            android:exported="true"
+            android:label="@string/bs_agent_label"
+            android:icon="@mipmap/bs_ic_launcher"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data android:name="com.android.systemui.action_assist_icon" android:resource="@drawable/bs_ic_agent" />
+        </activity>
+
+        <!-- Locale / Tasker / MacroDroid plugin -->
+        <activity
+            android:name="com.eggman.backstage.automation.LocaleEditActivity"
+            android:exported="true"
+            android:label="@string/bs_plugin_label"
+            android:icon="@mipmap/bs_ic_launcher"
+            android:theme="@style/Theme.Backstage.Agent"
+            android:taskAffinity="${applicationId}.plugin"
+            android:excludeFromRecents="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="com.twofortyfouram.locale.intent.action.EDIT_SETTING" />
+            </intent-filter>
+        </activity>
+        <receiver
+            android:name="com.eggman.backstage.automation.LocaleFireReceiver"
+            android:exported="true">
+            <!-- Exported by protocol; bundles are HMAC-signed by LocaleEditActivity. -->
+            <intent-filter>
+                <action android:name="com.twofortyfouram.locale.intent.action.FIRE_SETTING" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Token-protected broadcast API (RUN_TASK / STOP_TASK / ANSWER_TASK) -->
+        <receiver
+            android:name="com.eggman.backstage.automation.BroadcastApiReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.eggman.backstage.action.RUN_TASK" />
+                <action android:name="com.eggman.backstage.action.STOP_TASK" />
+                <action android:name="com.eggman.backstage.action.ANSWER_TASK" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Notification buttons (stop / approve / deny / RemoteInput reply; "Mini window" / "Full screen" of the
+             "Desktop running in background" notification) -->
+        <receiver
+            android:name="com.eggman.backstage.notify.NotificationActionReceiver"
+            android:exported="false" />
+
+        <!-- RECEIVE_BOOT_COMPLETED permits persisted jobs. -->
+        <service
+            android:name="com.eggman.backstage.skills.SkillSyncJobService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="true" />
+        <provider
+            android:name="com.eggman.backstage.skills.SkillSyncInitProvider"
+            android:authorities="${applicationId}.backstage-skill-sync-init"
+            android:exported="false"
+            android:initOrder="10" />
+
+        <!-- Scheduled & recurring tasks -->
+        <receiver
+            android:name="com.eggman.backstage.schedule.ScheduleAlarmReceiver"
+            android:exported="false" />
+        <!-- "Run again" from a schedule notification (foreground context; unlock first on the lock screen) -->
+        <activity
+            android:name="com.eggman.backstage.notify.OpenThreadActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="" />
+        <activity
+            android:name="com.eggman.backstage.schedule.ScheduleRunActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="" />
+        <receiver
+            android:name="com.eggman.backstage.schedule.ScheduleBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Quick Settings tile: voice command -->
+        <service
+            android:name="com.eggman.backstage.tile.AgentTileService"
+            android:exported="true"
+            android:icon="@drawable/bs_ic_agent"
+            android:label="@string/bs_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="false" />
+        </service>
+
+        <!-- Wake word: microphone foreground service (needs only its notification) -->
+        <service
+            android:name="com.eggman.backstage.voice.WakeWordService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- Floating agent bubble: a launcher of the chat sheet below (voice runs there, so no microphone type). -->
+        <service
+            android:name="com.eggman.backstage.overlay.BubbleService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Floating assistant bubble the user enabled to give the on-device agent tasks and stop them from any app" />
+        </service>
+
+        <!-- Chat panel of the desktop popup (its chat button) and of the floating bubble: a translucent bottom sheet in its
+             own task, not in recents, not "the app" for ShellLifecycle. Opened only by the popup (Dextop glue), the
+             bubble and the assistant entry, so not exported. -->
+        <activity
+            android:name="com.eggman.backstage.ui.minichat.MiniChatActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Backstage.MiniChat"
+            android:windowSoftInputMode="adjustResize|stateAlwaysVisible"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode" />
+
+        <!-- Home-screen widgets (RemoteViews) + their helper activities -->
+        <receiver
+            android:name="com.eggman.backstage.entry.ListenWidget"
+            android:exported="true"
+            android:label="@string/bs_widget_listen_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/bs_widget_listen_info" />
+        </receiver>
+        <receiver
+            android:name="com.eggman.backstage.entry.BubbleWidget"
+            android:exported="true"
+            android:label="@string/bs_widget_bubble_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/bs_widget_bubble_info" />
+        </receiver>
+        <receiver
+            android:name="com.eggman.backstage.entry.QuickActionWidget"
+            android:exported="true"
+            android:label="@string/bs_widget_quick_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/bs_widget_quick_info" />
+        </receiver>
+        <activity
+            android:name="com.eggman.backstage.entry.QuickActionWidgetConfigActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Backstage.Agent"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.widgetconfig">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name="com.eggman.backstage.entry.QuickRunActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="" />
+
+        <!-- Surface start-up (channels, notifier, alarms); runs after the core's init provider. -->
+        <provider
+            android:name="com.eggman.backstage.entry.SurfacesInitProvider"
+            android:authorities="${applicationId}.backstage-surfaces"
+            android:exported="false"
+            android:initOrder="10" />
+        <!-- shares an exported skill (a zip in the cache's skill-share folder) with another app; read-only grants. -->
+        <provider
+            android:name="com.eggman.backstage.skills.SkillShareProvider"
+            android:authorities="${applicationId}.backstage-skills"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/bs_skill_share_paths" />
+        </provider>
+        <!-- / components -->
+    </application>
+</manifest>

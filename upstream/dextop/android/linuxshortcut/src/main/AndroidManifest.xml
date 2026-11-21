@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholders (LXSTUB_*) are replaced on the device for each Linux application. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="LXSTUB_LABEL_PLACEHOLDER_0000000000"
+        android:icon="@drawable/lxstub_icon"
+        android:allowBackup="false">
+        <meta-data android:name="dextop.target" android:value="LXSTUB_TARGET_PLACEHOLDER" />
+        <meta-data android:name="dextop.container" android:value="LXSTUB_CONTAINER_PLACEHOLDER" />
+        <meta-data android:name="dextop.desktop" android:value="LXSTUB_DESKTOP_PLACEHOLDER" />
+        <meta-data android:name="dextop.token" android:value="LXSTUB_TOKEN_PLACEHOLDER" />
+        <activity
+            android:name="moe.n4tsu.dextop.lxstub.Launch"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- The Linux application's windows: Dextop draws them in this launcher's own tasks,
+             so the system (and DeX) shows the application's name and icon, not Dextop's. -->
+        <activity
+            android:name="moe.n4tsu.dextop.lxstub.Window"
+            android:exported="true"
+            android:documentLaunchMode="always"
+            android:autoRemoveFromRecents="true"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|density|uiMode"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+    </application>
+</manifest>

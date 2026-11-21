@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- github-flavor overlay (backstage/dextop-integration.gradle). Upstream regenerates main/res/values*/strings.xml
+     from its ARB catalogs on every build, so overrides must live in a flavor source set. -->
+<resources>
+    <!-- The app is "Backstage": its one launcher icon (Dextop's launcher activity, Home with the Agent tab), recents and
+         DeX window titles of Dextop's screens. AndroidManifest.github.xml also sets the application label. -->
+    <string name="app_name" translatable="false">Backstage</string>
+    <!-- The app's ONE accessibility service (Dextop's MirrorService: the desktop and the agent), "Backstage" in Android's
+         accessibility settings; its description covers both uses (res/xml/mirror_accessibility_service.xml). -->
+    <string name="backstage_accessibility_label" translatable="false">Backstage</string>
+    <string name="backstage_accessibility_description" translatable="false">Runs the Backstage desktop (its display, window, popup, keyboard and mouse input) and lets the Backstage AI agent read and operate apps on the desktop and on your phone screen: taps, typing, gestures and screenshots. The agent acts only for tasks you start and for automations or MCP clients you allowed in its settings; it also reads incoming notifications so tasks can refer to them. Screen content goes only to the AI provider you chose.</string>
+    <string name="quick_settings_tile_label" translatable="false">Backstage desktop</string>
+    <string name="quick_settings_display_tile_label" translatable="false">Backstage display</string>
+</resources>

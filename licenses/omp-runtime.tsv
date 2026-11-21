@@ -1,0 +1,5 @@
+# GitHub-only assets/omp runtime. Columns: component | origin | license | notice/license paths (space-separated)
+omp	https://github.com/can1357/oh-my-pi	MIT	licenses/texts/omp/LICENSE
+omp-termux	https://github.com/hmeqo/omp-termux	MIT	upstream/omp-termux/LICENSE
+bun	https://github.com/oven-sh/bun	MIT plus bundled third-party licenses (including LGPL JavaScriptCore; see upstream notice)	licenses/texts/omp/bun-LICENSE.md
+Termux bootstrap	https://github.com/termux/termux-packages	Various (including GPL); full package licenses are inside the bootstrap at share/doc and share/LICENSES	-

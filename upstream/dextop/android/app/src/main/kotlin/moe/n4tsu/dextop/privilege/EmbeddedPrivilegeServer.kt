@@ -1,0 +1,176 @@
+package moe.n4tsu.dextop.privilege
+
+import android.content.AttributionSource
+import android.net.Uri
+import android.os.Binder
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.Parcel
+import moe.n4tsu.dextop.input.PrivilegedInputService
+import java.io.File
+import org.lsposed.hiddenapibypass.HiddenApiBypass
+
+/** Minimal bundled ADB process. It exposes no package-management UI or third-party API. */
+object EmbeddedPrivilegeServer {
+    @JvmStatic
+    fun main(arguments: Array<String>) {
+        val packageName = arguments.firstOrNull() ?: error("Missing package name")
+        arguments.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { nativeInputLibrary ->
+            System.setProperty("moe.n4tsu.dextop.embedded_input_library", nativeInputLibrary)
+        }
+        Looper.prepareMainLooper()
+        // An app update deletes the APK this process was started from. Exit then even if the main
+        // thread is stuck publishing to a provider that is being replaced.
+        val apk = System.getenv("CLASSPATH")?.substringBefore(':')?.takeIf { it.isNotBlank() }
+        if (apk != null) Thread({
+            while (File(apk).exists()) Thread.sleep(5_000L)
+            kotlin.system.exitProcess(0)
+        }, "DextopApkWatch").apply { isDaemon = true }.start()
+        HiddenApiBypass.addHiddenApiExemptions("Landroid/app/", "Landroid/content/", "Landroid/os/", "Landroid/window/")
+        val server = RuntimeBinder()
+        val handler = Handler(Looper.getMainLooper())
+        lateinit var publishAndWatch: () -> Unit
+        publishAndWatch = {
+            val response = runCatching {
+                publishBinder("$packageName.embedded_privilege", server,
+                    argument = apk)
+            }.getOrNull()
+            // The app already has a live server, or this one runs an outdated APK.
+            if (response?.getBoolean("retire") == true) kotlin.system.exitProcess(0)
+            val lifecycle = response
+                ?.takeIf { it.getBoolean("accepted") }
+                ?.getBinder(EmbeddedPrivilegeProtocol.providerLifecycleBinder)
+            if (lifecycle == null) {
+                // The app process may be absent while the wireless-debugging
+                // shell process is still healthy.  Do not terminate the
+                // embedded Binder: retain it and retry publishing when the
+                // provider becomes available again.
+                handler.postDelayed(publishAndWatch, 1_500L)
+            } else {
+                runCatching {
+                    lifecycle.linkToDeath(
+                        { handler.postDelayed(publishAndWatch, 500L) },
+                        0
+                    )
+                }.onFailure {
+                    handler.postDelayed(publishAndWatch, 500L)
+                }
+            }
+        }
+        publishAndWatch()
+        Looper.loop()
+    }
+
+    internal fun publishBinder(
+        authority: String, binder: Binder,
+        method: String = EmbeddedPrivilegeProtocol.providerMethod, argument: String? = null, payload: Bundle? = null,
+    ): Bundle? {
+        val activityManager = Class.forName("android.app.ActivityManager")
+            .getDeclaredMethod("getService")
+            .invoke(null)
+        val acquire = activityManager.javaClass.interfaces
+            .flatMap { it.methods.asIterable() }
+            .first { it.name == "getContentProviderExternal" }
+        val acquired = acquire.invoke(activityManager, authority, 0, null, authority)
+            ?: error("Provider unavailable: $authority")
+        val provider = runCatching {
+            acquired.javaClass.getDeclaredField("provider").apply { isAccessible = true }.get(acquired)
+        }.getOrElse { acquired }
+        val extras = Bundle(payload ?: Bundle()).apply { putBinder(EmbeddedPrivilegeProtocol.providerBinder, binder) }
+        val call = Class.forName("android.content.IContentProvider").methods
+            .filter { it.name == "call" }
+            .maxBy { it.parameterTypes.size }
+        var stringIndex = 0
+        val callArguments = call.parameterTypes.map { type ->
+            when {
+                type == AttributionSource::class.java -> AttributionSource.Builder(android.os.Process.myUid())
+                    .setPackageName("com.android.shell")
+                    .build()
+                type == String::class.java -> when (stringIndex++) {
+                    0 -> authority
+                    1 -> method
+                    else -> argument
+                }
+                type == Bundle::class.java -> extras
+                type == Int::class.javaPrimitiveType -> 0
+                else -> null
+            }
+        }.toTypedArray()
+        return call.invoke(provider, *callArguments) as? Bundle
+    }
+
+    private fun systemService(name: String): android.os.IBinder? {
+        if (name == WINDOW_ORGANIZER_SERVICE) return windowOrganizerController()
+        return Class.forName("android.os.ServiceManager")
+            .getDeclaredMethod("getService", String::class.java)
+            .invoke(null, name) as? android.os.IBinder
+    }
+
+    /** Dextop's window manager reorders tasks through the shell-owned organizer controller. */
+    private const val WINDOW_ORGANIZER_SERVICE = "dextop.window_organizer"
+
+    private fun windowOrganizerController(): android.os.IBinder? = runCatching {
+        val taskManager = Class.forName("android.app.IActivityTaskManager\$Stub")
+            .getMethod("asInterface", android.os.IBinder::class.java)
+            .invoke(null, systemService("activity_task"))
+        val controller = taskManager.javaClass.getMethod("getWindowOrganizerController").invoke(taskManager)
+        controller.javaClass.getMethod("asBinder").invoke(controller) as android.os.IBinder
+    }.getOrNull()
+
+    private class RuntimeBinder : Binder() {
+        private val inputService by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { PrivilegedInputService() }
+
+        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+            data.enforceInterface(EmbeddedPrivilegeProtocol.descriptor)
+            return when (code) {
+                EmbeddedPrivilegeProtocol.transactService -> {
+                    val serviceName = data.readString() ?: error("Missing service name")
+                    val remoteCode = data.readInt()
+                    val remoteFlags = data.readInt()
+                    val target = systemService(serviceName) ?: error("Service unavailable: $serviceName")
+                    val nested = Parcel.obtain()
+                    try {
+                        nested.appendFrom(data, data.dataPosition(), data.dataAvail())
+                        nested.setDataPosition(0)
+                        target.transact(remoteCode, nested, reply, remoteFlags)
+                    } finally {
+                        nested.recycle()
+                    }
+                }
+                EmbeddedPrivilegeProtocol.executeCommand -> {
+                    val command = data.createStringArray() ?: emptyArray()
+                    val result = runCommand(command)
+                    reply?.writeNoException()
+                    reply?.writeInt(result.exitCode)
+                    reply?.writeString(result.output)
+                    reply?.writeString(result.error)
+                    true
+                }
+                EmbeddedPrivilegeProtocol.transactInputService -> {
+                    val remoteCode = data.readInt()
+                    val remoteFlags = data.readInt()
+                    val nested = Parcel.obtain()
+                    try {
+                        nested.appendFrom(data, data.dataPosition(), data.dataAvail())
+                        nested.setDataPosition(0)
+                        inputService.asBinder().transact(remoteCode, nested, reply, remoteFlags)
+                    } finally {
+                        nested.recycle()
+                    }
+                }
+                else -> super.onTransact(code, data, reply, flags)
+            }
+        }
+
+        private fun runCommand(command: Array<String>): RuntimeCommandResult {
+            if (command.isEmpty()) return RuntimeCommandResult(-1, "", "Empty command")
+            return runCatching {
+                val process = ProcessBuilder(*command).directory(File("/data/local/tmp")).start()
+                val stdout = process.inputStream.bufferedReader().use { it.readText() }
+                val stderr = process.errorStream.bufferedReader().use { it.readText() }
+                RuntimeCommandResult(process.waitFor(), stdout.trim(), stderr.trim())
+            }.getOrElse { RuntimeCommandResult(-1, "", it.message.orEmpty()) }
+        }
+    }
+}

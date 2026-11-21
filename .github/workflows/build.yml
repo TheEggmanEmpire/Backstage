@@ -1,0 +1,245 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Publish this tagged build as a prerelease
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  patches:
+    name: Patch series + toolchain pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Public repository content
+        run: scripts/check-publication.sh
+
+      - name: Snapshot drift guard + strict patch apply + Gradle hook injection
+        run: scripts/check-patches.sh
+
+      - name: Toolchain pin matches upstream's CI
+        run: scripts/flutter-version.sh --check
+
+      - name: Self-test of the upstream/patch/build scripts (fake upstream, no network)
+        run: scripts/tests/selftest.sh
+
+  build:
+    name: Tests, debug APK
+    needs: patches
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      # One ABI is enough to prove the build and run every static APK check; every ABI (Flutter's debug default)
+      # exceeds the runner's disk capacity. Release builds also target arm64.
+      BACKSTAGE_TARGET_PLATFORM: android-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      # Before the toolchain lands: the hosted image leaves ~14 GB free, too little for Flutter + NDK + Gradle.
+      - name: Free disk space (preinstalled toolchains the build never uses; keeps the Android SDK)
+        run: scripts/ci-free-disk-space.sh
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - name: Agent library unit tests
+        run: scripts/test.sh --only library
+
+      - name: Agent library Android Lint (errors fail)
+        run: scripts/test.sh --only lint
+
+      - name: Prepare the patched Dextop tree
+        run: scripts/prepare-work-tree.sh
+
+      - name: Flutter tests (patched tree)
+        run: scripts/test.sh --only flutter --no-prepare
+
+      - name: Build debug APK, arm64
+        run: scripts/build-apk.sh debug --no-prepare
+
+      - name: Verify the debug APK (signing, badging, exported components, FGS types, accessibility configs)
+        run: for apk in dist/backstage-[0-9]*-debug.apk; do scripts/verify-apk.sh "$apk"; done
+
+      # The APKs are in dist/; native libraries, dex and APK outputs in the work tree are not needed again.
+      - name: Remove build intermediates no later step needs
+        run: scripts/ci-free-disk-space.sh --build-outputs
+
+      - name: Android unit tests (patched tree)
+        run: scripts/test.sh --only android --no-prepare
+
+      - name: Upload debug APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: backstage-debug-${{ github.sha }}
+          path: |
+            dist/*.apk
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.sha }}
+          path: |
+            build/flutter-test-report.json
+            build/work/dextop/build/*/reports/
+            backstage/android/build/reports/
+          if-no-files-found: ignore
+
+      - name: Disk usage
+        if: always()
+        run: df -h /
+
+  release-secrets:
+    name: Release signing secrets
+    # A fork or a fresh repository has no signing secrets: the release is then SKIPPED (job `release` shows as
+    # skipped, with a warning here) instead of failing the tag build. A partial set fails: build-apk.sh would fall
+    # back to the debug key and publish a debug-signed "release". Nothing is checked out; no code runs next to them.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - name: Check the release signing secrets
+        id: check
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BACKSTAGE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.BACKSTAGE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BACKSTAGE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BACKSTAGE_KEY_PASSWORD }}
+        run: |
+          missing=()
+          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            [ -n "${!name:-}" ] || missing+=("BACKSTAGE_$name")
+          done
+          if [ "${#missing[@]}" -eq 4 ]; then
+            msg="No release signing secrets (BACKSTAGE_KEYSTORE_BASE64, BACKSTAGE_KEYSTORE_PASSWORD, BACKSTAGE_KEY_ALIAS, BACKSTAGE_KEY_PASSWORD): the signed release is skipped. See README.md, Maintainer notes."
+            echo "::warning::$msg"
+            echo "$msg" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          elif [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Release signing secrets incomplete, missing: ${missing[*]} (set all four, or none to skip the release)"
+            exit 1
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    name: Signed release
+    if: startsWith(github.ref, 'refs/tags/v') && needs.release-secrets.outputs.present == 'true'
+    needs: [build, release-secrets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write
+    env:
+      # Pin of the release certificate: a replaced keystore secret fails the build and verify-apk
+      # instead of publishing an APK that existing installs cannot update to. Default: the published release key
+      # (f7deb2c2…); a fork sets the repository variable BACKSTAGE_RELEASE_CERT_SHA256 to its own.
+      BACKSTAGE_EXPECT_CERT_SHA256: ${{ vars.BACKSTAGE_RELEASE_CERT_SHA256 || 'f7deb2c28a5e45c9f1a13003d25766842bf6940b97116aa2bcc31a39b4976c73' }}
+      BACKSTAGE_TARGET_PLATFORM: android-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space (preinstalled toolchains the build never uses; keeps the Android SDK)
+        run: scripts/ci-free-disk-space.sh
+
+      - uses: ./.github/actions/setup-toolchain
+        with:
+          # The signed build starts from clean downloads: no cache written by another job is restored next to the keys.
+          cache: 'off'
+
+      - name: Restore the release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BACKSTAGE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Secret BACKSTAGE_KEYSTORE_BASE64 is not set (base64 of the release .jks)"; exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/backstage-release.jks"
+          echo "BACKSTAGE_KEYSTORE=$RUNNER_TEMP/backstage-release.jks" >> "$GITHUB_ENV"
+
+      - name: Build release APK (arm64)
+        env:
+          BACKSTAGE_KEYSTORE_PASSWORD: ${{ secrets.BACKSTAGE_KEYSTORE_PASSWORD }}
+          BACKSTAGE_KEY_ALIAS: ${{ secrets.BACKSTAGE_KEY_ALIAS }}
+          BACKSTAGE_KEY_PASSWORD: ${{ secrets.BACKSTAGE_KEY_PASSWORD }}
+        run: scripts/build-apk.sh release
+
+      - name: Verify the release APK
+        run: for apk in dist/backstage-[0-9]*-release.apk; do scripts/verify-apk.sh "$apk" --release; done
+
+      - name: Check the version against the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ls dist/backstage-"$tag"-arm64-v8a-release.apk > /dev/null 2>&1 ||
+            echo "::warning::No dist/backstage-${tag}-arm64-v8a-release.apk: the backstage version in backstage/dextop-integration.gradle does not match tag $GITHUB_REF_NAME"
+
+      # GPL-3.0 §6 / LGPL-2.1 §6: the prebuilt third-party binaries in the APK have their source only on third-party
+      # servers, so each release carries a copy (licenses/third-party-sources.tsv). A missing or altered archive fails.
+      - name: Mirror the sources of the prebuilt third-party binaries
+        run: scripts/fetch-third-party-sources.sh "$RUNNER_TEMP/sources"
+
+      - name: Release notes (changelog + source code)
+        run: |
+          # The "## <version>" section of CHANGELOG.md (up to the next "## " heading) opens the release notes.
+          version="${GITHUB_REF_NAME#v}"
+          awk -v h="## $version" '$0 == h { on = 1; next } on && /^## / { exit } on' CHANGELOG.md \
+            | sed -e '/./,$!d' > "$RUNNER_TEMP/changelog-section.md"
+          if [ ! -s "$RUNNER_TEMP/changelog-section.md" ]; then
+            echo "::warning::CHANGELOG.md has no '## $version' section: the release notes carry no change description"
+          fi
+          {
+            if [ -s "$RUNNER_TEMP/changelog-section.md" ]; then
+              echo "## What's new in $version"
+              echo
+              cat "$RUNNER_TEMP/changelog-section.md"
+              echo
+            fi
+            echo "## Source code"
+            echo
+            echo "Backstage is GPL-3.0-or-later (a modified version of Dextop). The corresponding source of these APKs is this"
+            echo "repository at tag \`$GITHUB_REF_NAME\` (commit \`$GITHUB_SHA\`): the \"Source code\" archives of this release."
+            echo "The APK names that commit in \`assets/backstage/THIRD_PARTY_NOTICES.txt\`."
+            echo
+            echo "Prebuilt third-party binaries inside the APK are redistributed unchanged; their sources are attached here"
+            echo "(\`SOURCES-SHA256SUMS\` lists them, NOTICE.md says which binary each one covers):"
+            echo
+            grep -v '^#' licenses/third-party-sources.tsv | awk -F '\t' 'NF >= 4 { printf "- `%s`: %s\n", $1, $4 }'
+            echo
+            echo "The APK also contains closed-source Google SDKs inherited from upstream Dextop (see NOTICE.md)."
+          } > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: |
+            dist/*.apk
+            dist/SHA256SUMS
+            ${{ runner.temp }}/sources/*
+          body_path: ${{ runner.temp }}/release-notes.md
+          prerelease: ${{ inputs.prerelease || false }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Remove the keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/backstage-release.jks"

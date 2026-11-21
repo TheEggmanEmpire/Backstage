@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the folders Backstage writes shared files to: skill zips (SkillsScreen), exported chats (ChatExport). -->
+<paths>
+    <cache-path name="skills" path="skill-share/" />
+    <cache-path name="chats" path="chat-share/" />
+</paths>

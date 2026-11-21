@@ -1,0 +1,10 @@
+// Backstage settings hook for upstream Dextop's android/settings.gradle.kts.
+//
+// Applied by ONE line that scripts/inject.sh appends to the work tree's settings.gradle.kts
+// (marker "// backstage:settings"); upstream files are never patched for build configuration.
+// Includes the:backstage agent library and publishes the repository root for dextop-integration.gradle.
+// Groovy on purpose: a script plugin needs no Kotlin-DSL accessors or extra classpath.
+def backstageRoot = buildscript.sourceFile.parentFile.parentFile.canonicalFile
+gradle.ext.backstageRoot = backstageRoot.path
+include ':backstage'
+project(':backstage').projectDir = new File(backstageRoot, 'backstage/android')

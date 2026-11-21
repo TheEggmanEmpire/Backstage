@@ -1,0 +1,160 @@
+name: Upstream watch
+
+on:
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize discovery, validation and publishing, including manual runs.
+concurrency:
+  group: upstream-release-update
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      needed: ${{ steps.plan.outputs.needed }}
+      ready: ${{ steps.export.outputs.ready }}
+    env:
+      BACKSTAGE_TARGET_PLATFORM: android-arm64
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Find the next upstream release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 -I scripts/auto-upstream.py plan --output "$GITHUB_OUTPUT"
+
+      - name: Update the snapshot and patch series
+        if: steps.plan.outputs.needed == 'true'
+        env:
+          BACKSTAGE_EXPECT_UPSTREAM_TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -o pipefail
+          scripts/update-upstream.sh --ci --test fast latest-tag 2>&1 | tee "$RUNNER_TEMP/update-report.txt"
+
+      - name: Free disk space
+        if: steps.plan.outputs.needed == 'true'
+        run: scripts/ci-free-disk-space.sh
+
+      - uses: ./.github/actions/setup-toolchain
+        if: steps.plan.outputs.needed == 'true'
+        with:
+          # Upstream code runs here; never exchange build caches with trusted releases.
+          cache: 'off'
+
+      - name: Install the workflow test dependencies
+        if: steps.plan.outputs.needed == 'true'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/upstream-tests"
+          "$RUNNER_TEMP/upstream-tests/bin/pip" install pytest PyYAML
+          echo "$RUNNER_TEMP/upstream-tests/bin" >> "$GITHUB_PATH"
+
+      - name: Validate patches and run every test suite
+        if: steps.plan.outputs.needed == 'true'
+        run: |
+          set -o pipefail
+          {
+            scripts/check-patches.sh &&
+            python3 -m pytest -q scripts/tests &&
+            bash scripts/tests/selftest.sh &&
+            scripts/test.sh &&
+            scripts/build-apk.sh debug --no-prepare &&
+            scripts/verify-apk.sh dist/backstage-*-debug.apk
+          } 2>&1 | tee -a "$RUNNER_TEMP/update-report.txt"
+
+      - name: Export validated update data
+        id: export
+        if: steps.plan.outputs.needed == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.plan.outputs.tag }}
+          BASE_SHA: ${{ github.sha }}
+        run: |
+          python3 -I scripts/auto-upstream.py export --tag "$UPSTREAM_TAG" --base "$BASE_SHA" --archive "$RUNNER_TEMP/update.tar.gz"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload validated update data
+        if: steps.export.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-update-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/update.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload failure report
+        if: failure() && steps.plan.outputs.needed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/update-report.txt
+            build/upstream-rebase.report.md
+          if-no-files-found: warn
+          retention-days: 7
+
+  publish:
+    needs: validate
+    if: always() && github.ref == 'refs/heads/main' && needs.validate.outputs.needed == 'true' && needs.validate.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      UPSTREAM_TAG: ${{ needs.validate.outputs.tag }}
+      BASE_SHA: ${{ github.sha }}
+    steps:
+      # This exact workflow revision supplies the publisher. The artifact cannot replace it.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download validated update data
+        if: needs.validate.result == 'success' && needs.validate.outputs.ready == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-update-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/update
+
+      - name: Publish the version and changelog and dispatch the prerelease build
+        if: needs.validate.result == 'success' && needs.validate.outputs.ready == 'true'
+        run: |
+          gh auth setup-git
+          python3 -I scripts/auto-upstream.py publish --tag "$UPSTREAM_TAG" --base "$BASE_SHA" --archive "$RUNNER_TEMP/update/update.tar.gz"
+
+      - name: Download failure report
+        if: needs.validate.result == 'failure'
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/failure
+        continue-on-error: true
+
+      - name: Open or update one failure issue
+        if: always() && (needs.validate.result == 'failure' || failure())
+        run: |
+          mkdir -p "$RUNNER_TEMP/failure"
+          report="$RUNNER_TEMP/failure/combined.txt"
+          printf 'Workflow run: %s/%s/actions/runs/%s\n\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > "$report"
+          find "$RUNNER_TEMP/failure" -type f ! -name combined.txt -exec cat {} \; >> "$report"
+          python3 -I scripts/auto-upstream.py failure --tag "$UPSTREAM_TAG" --report "$report"

@@ -1,0 +1,548 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TheEggmanEmpire <backstage@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 13:33:09 +0000
+Subject: [PATCH] fork-identity
+
+Namespace shell paths, launch intents, companion trust and device-report settings to the installed package. Point update and source links at Backstage and preserve the upstream interfaces used by its desktop services.
+---
+ .../dextop/CardCompanionCallerVerifier.kt     | 40 ++++++++++++++++---
+ .../moe/n4tsu/dextop/CardexRelayService.kt    |  2 +-
+ .../moe/n4tsu/dextop/DextopLaunchIntent.kt    | 21 ++++++++++
+ .../kotlin/moe/n4tsu/dextop/MainActivity.kt   | 17 ++++----
+ .../moe/n4tsu/dextop/linux/LinuxChannel.kt    |  3 +-
+ .../dextop/linux/LinuxContainerService.kt     | 12 +++++-
+ .../moe/n4tsu/dextop/linux/LinuxProot.kt      |  8 +++-
+ .../n4tsu/dextop/linux/LinuxServiceHost.kt    | 22 +++++++++-
+ .../n4tsu/dextop/linux/LinuxSessionService.kt |  2 +-
+ .../moe/n4tsu/dextop/linux/LinuxStoreJobs.kt  |  2 +-
+ .../privilege/EmbeddedPairingNotification.kt  |  2 +-
+ .../dextop/privilege/EmbeddedServerPayload.kt |  5 ++-
+ .../moe/n4tsu/dextop/privilege/ShellPaths.kt  | 17 ++++++++
+ .../dextop/CardCompanionForkTrustTest.kt      | 39 ++++++++++++++++++
+ .../dextop/linux/LinuxServiceHostForkTest.kt  | 27 +++++++++++++
+ .../n4tsu/dextop/privilege/ShellPathsTest.kt  | 17 ++++++++
+ lib/app_info.dart                             |  6 ++-
+ lib/home_screen.dart                          | 10 +----
+ 18 files changed, 220 insertions(+), 32 deletions(-)
+ create mode 100644 android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLaunchIntent.kt
+ create mode 100644 android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/ShellPaths.kt
+ create mode 100644 android/app/src/test/kotlin/moe/n4tsu/dextop/CardCompanionForkTrustTest.kt
+ create mode 100644 android/app/src/test/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHostForkTest.kt
+ create mode 100644 android/app/src/test/kotlin/moe/n4tsu/dextop/privilege/ShellPathsTest.kt
+
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/CardCompanionCallerVerifier.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/CardCompanionCallerVerifier.kt
+index 362a03cdbac5a90af6c189ccb6c8028f55f50219..2d949819041074df2f5d07ac9522b9a1a7a2b0b3 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/CardCompanionCallerVerifier.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/CardCompanionCallerVerifier.kt
+@@ -18,11 +18,21 @@ internal object CardCompanionCallerVerifier {
+         "8f232a21b091ac6ddc64298f845116a0ef8fe862f2911f970964d31387a1cbea",
+     )
+ 
++    /** Identity this build trusts: the official companions, or (fork build) only its own, see [trustedIdentity]. */
++    private val trusted by lazy {
++        trustedIdentity(
++            setOf(BuildConfig.CAR_COMPANION_PACKAGE, BuildConfig.CAR_COMPANION_DRIVING_PACKAGE),
++            BuildConfig.CAR_COMPANION_CERTIFICATES,
++        )
++    }
++
+     fun isTrusted(context: Context, uid: Int): Boolean {
+         if (uid < 0) return false
+         val packages = context.packageManager.getPackagesForUid(uid)?.toSet().orEmpty()
+-        val companionPackage = companionPackages.firstOrNull { it in packages } ?: return false
+-        if (BuildConfig.DEBUG) return true
++        val (trustedPackages, trustedCertificates) = trusted
++        val companionPackage = trustedPackages.firstOrNull { it in packages } ?: return false
++        // Upstream debug builds skip the certificate check; a fork build pins its own certificate in every build type.
++        if (BuildConfig.DEBUG && trustedCertificates == trustedCertificateSha256) return true
+ 
+         val info = runCatching {
+             context.packageManager.getPackageInfo(
+@@ -38,17 +48,37 @@ internal object CardCompanionCallerVerifier {
+         } else {
+             signingInfo.signingCertificateHistory
+         }
+-        return matchesOfficialIdentity(
++        return matchesIdentity(
+             packages,
+             certificates.mapTo(mutableSetOf()) { it.toByteArray().sha256() },
++            trustedPackages,
++            trustedCertificates,
+         )
+     }
+ 
+     internal fun matchesOfficialIdentity(
+         packages: Set<String>,
+         certificateSha256: Set<String>,
+-    ): Boolean = packages.any { it in companionPackages } &&
+-        certificateSha256.any { it.lowercase() in trustedCertificateSha256 }
++    ): Boolean = matchesIdentity(packages, certificateSha256, companionPackages, trustedCertificateSha256)
++
++    internal fun matchesIdentity(
++        packages: Set<String>,
++        certificateSha256: Set<String>,
++        trustedPackages: Set<String>,
++        trustedCertificates: Set<String>,
++    ): Boolean = packages.any { it in trustedPackages } &&
++        certificateSha256.any { it.lowercase() in trustedCertificates }
++
++    /**
++     * Fork builds (non-empty [forkCertificates], comma-separated SHA-256) trust ONLY their own companion packages
++     * signed with their own keys, never the official companions or certificates; otherwise the official identity.
++     */
++    internal fun trustedIdentity(forkPackages: Set<String>, forkCertificates: String): Pair<Set<String>, Set<String>> {
++        val certificates = forkCertificates.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
++        val packages = forkPackages.filter { it.isNotBlank() }.toSet()
++        return if (certificates.isEmpty() || packages.isEmpty()) companionPackages to trustedCertificateSha256
++        else packages to certificates
++    }
+ 
+     private fun ByteArray.sha256(): String =
+         MessageDigest.getInstance("SHA-256")
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/CardexRelayService.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/CardexRelayService.kt
+index a6242f81ad7244f1762c538ec01ee8fb75aba211..8256d2a5910a02202fa3cb3f823df1f8dcb0c9d6 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/CardexRelayService.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/CardexRelayService.kt
+@@ -867,7 +867,7 @@ class CardexRelayService : Service() {
+         val packages = packageManager.getPackagesForUid(uid).orEmpty()
+         activeClientMode = when {
+             packages.any { it.endsWith(".driving") } -> "Driving"
+-            packages.any { it == "moe.n4tsu.dextop.cardex" } -> "Parking"
++            packages.any { it == "moe.n4tsu.dextop.cardex" || it == BuildConfig.CAR_COMPANION_PACKAGE } -> "Parking"
+             else -> activeClientMode
+         }
+     }
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLaunchIntent.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLaunchIntent.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..5664539367ef58d135a0028857b5327454f6216e
+--- /dev/null
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLaunchIntent.kt
+@@ -0,0 +1,21 @@
++package moe.n4tsu.dextop
++
++import android.content.Context
++import android.content.Intent
++
++/**
++ * Backstage fork identity: Dextop's own "open Dextop" intents (pairing result, Linux store and
++ * session notifications, app restart). Upstream builds them with getLaunchIntentForPackage(own package), i.e. the
++ * package's launcher activity. A fork whose only launcher icon is another activity (Backstage: its agent; the overlay
++ * removes the LAUNCHER filter of DextopLauncherActivity) would open that activity instead of Dextop's UI, so the intent
++ * names Dextop's launcher trampoline explicitly, with the fields of the package's
++ * launcher intent (MAIN + LAUNCHER, the package, NEW_TASK). Nullable like the call it replaces; preserves upstream ids.
++ */
++internal object DextopLaunchIntent {
++    fun forOwnUi(context: Context): Intent? =
++        Intent(Intent.ACTION_MAIN)
++            .addCategory(Intent.CATEGORY_LAUNCHER)
++            .setPackage(context.packageName)
++            .setClassName(context.packageName, DextopLauncherActivity::class.java.name)
++            .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
++}
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
+index 9b3c002466c14cf2eb0e91d8213dd1ed28567d9d..ca1ce9684a148148ca60d38e4bb3950e3022cb00 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
+@@ -36,7 +36,7 @@ open class MainActivity : FlutterActivity() {
+     companion object {
+         private const val STELLAR_PACKAGE = "roro.stellar.manager"
+         private const val SHEVERY_PACKAGE = "com.hamondev.shevery"
+-        private const val CAR_COMPANION_PACKAGE = "moe.n4tsu.dextop.cardex"
++        private const val CAR_COMPANION_PACKAGE = BuildConfig.CAR_COMPANION_PACKAGE
+         private const val SHIZUKU_PERMISSION = "moe.shizuku.manager.permission.API_V23"
+         private const val STELLAR_REQUEST_BINDER_ACTION = "roro.stellar.intent.action.REQUEST_BINDER"
+         private const val EMBEDDED_NOTIFICATION_PERMISSION_REQUEST = 8104
+@@ -593,7 +593,8 @@ open class MainActivity : FlutterActivity() {
+                     }
+                 ))
+                 "sendDeviceReportEmail" -> {
+-                    val recipient = "dextop-device@n4t.su"
++                    // Forks (BuildConfig) do not send reports to upstream's inbox; empty = the user picks one.
++                    val recipient = BuildConfig.DEVICE_REPORT_EMAIL
+                     val subject = call.argument<String>("subject").orEmpty()
+                     val body = call.argument<String>("body").orEmpty()
+                     // Keep the recipient in the literal mailto path. Some mail
+@@ -601,13 +602,15 @@ open class MainActivity : FlutterActivity() {
+                     // in an opaque Uri.Builder part.
+                     val uri = Uri.parse(
+                         "mailto:$recipient" +
+-                            "?to=${Uri.encode(recipient)}" +
+-                            "&subject=${Uri.encode(subject)}" +
++                            (if (recipient.isEmpty()) "?" else "?to=${Uri.encode(recipient)}&") +
++                            "subject=${Uri.encode(subject)}" +
+                             "&body=${Uri.encode(body)}"
+                     )
+                     val email = Intent(Intent.ACTION_SENDTO, uri).apply {
+-                        putExtra(Intent.EXTRA_EMAIL, arrayOf(recipient))
+-                        putExtra("android.intent.extra.EMAIL", arrayOf(recipient))
++                        if (recipient.isNotEmpty()) {
++                            putExtra(Intent.EXTRA_EMAIL, arrayOf(recipient))
++                            putExtra("android.intent.extra.EMAIL", arrayOf(recipient))
++                        }
+                         putExtra(Intent.EXTRA_SUBJECT, subject)
+                         putExtra(Intent.EXTRA_TEXT, body)
+                     }
+@@ -1241,7 +1244,7 @@ open class MainActivity : FlutterActivity() {
+ 
+     private fun restartApp(result: MethodChannel.Result) {
+         result.success(null)
+-        val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
++        val launch = DextopLaunchIntent.forOwnUi(this)?.apply {
+             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+         } ?: return
+         Handler(Looper.getMainLooper()).postDelayed({
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxChannel.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxChannel.kt
+index 147b418d47d80ca5dad1420adc3de2610572faf0..044719381cd0de712a4b61a87fc053863b864889 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxChannel.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxChannel.kt
+@@ -160,7 +160,8 @@ internal class LinuxChannel(private val context: Context, messenger: BinaryMesse
+                     }
+                     val privileged = moe.n4tsu.dextop.PrivilegedAccess("DextopLinuxReset")
+                     val privilegedCleared = privileged.isAvailable() &&
+-                        privileged.execute("/system/bin/rm", "-rf", "/data/local/tmp/dextop/linux").succeeded
++                        privileged.execute("/system/bin/rm", "-rf",
++                            moe.n4tsu.dextop.privilege.ShellPaths.linuxBase(context.packageName)).succeeded
+                     mapOf("privilegedLeft" to !privilegedCleared)
+                 })
+                 "repair" -> remote({ it.repair(call.argument<String>("id")!!) })
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxContainerService.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxContainerService.kt
+index 3ad67743b96aa3af0b551c9aa1041a58e7a907b6..371c6936edcacad2451597cdad8d0cc52d4138ac 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxContainerService.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxContainerService.kt
+@@ -32,6 +32,15 @@ class LinuxContainerService(context: android.content.Context? = null) : ILinuxCo
+     // Shizuku/Stellar can also supply a Context to a shell-owned UserService.
+     // Only an ordinary Android UID selects the in-app runtime.
+     private val androidContext = context?.takeUnless { Os.getuid() in setOf(0, 2000) }
++    init {
++        // A Shizuku/Stellar UserService never runs LinuxServiceHost.main(): bind it to this APK's application id
++        // before anything reads LinuxPaths (per-package Linux root, launcher installer allow-list).
++        if (LinuxServiceHost.hostPackage == null) {
++            runCatching {
++                LinuxServiceHost.shellHostPackage(Os.getuid(), context?.packageName, moe.n4tsu.dextop.BuildConfig.APPLICATION_ID)
++            }.getOrNull()?.let(LinuxServiceHost::bindHost)
++        }
++    }
+     companion object {
+         private const val TAG = "DextopLinuxService"
+         // Includes guest state files (AIDL transaction 47).
+@@ -133,7 +142,8 @@ class LinuxContainerService(context: android.content.Context? = null) : ILinuxCo
+             apk.close()
+             throw SecurityException("Silent package installation belongs to the explicit privilege broker")
+         }
+-        require(installerPackage == "moe.n4tsu.dextop" || installerPackage == "moe.n4tsu.gpdextop")
++        require(installerPackage == "moe.n4tsu.dextop" || installerPackage == "moe.n4tsu.gpdextop" ||
++            installerPackage == LinuxServiceHost.hostPackage)
+         require(size in 1..(32L * 1024 * 1024))
+         // PackageManager cannot open an APK in /sdcard/Android/data under its SELinux
+         // domain. Pass an already-open descriptor, then feed pm through stdin instead.
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxProot.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxProot.kt
+index 3d4f62edf01823c9bd43dbc38cb81b4f67b9b4ee..d35c919da8e2a82d6724f02a95726fcf63c1ac16 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxProot.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxProot.kt
+@@ -6,11 +6,17 @@ import java.util.concurrent.TimeUnit
+ /** Filesystem layout under the shell-owned /data/local/tmp. */
+ internal object LinuxPaths {
+     @Volatile private var androidBase: File? = null
+-    val base get() = androidBase ?: File("/data/local/tmp/dextop/linux")
++    @Volatile private var shellBase = File("/data/local/tmp/dextop/linux")
++    val base get() = androidBase ?: shellBase
+     val containers get() = File(base, "containers")
+     /** PROOT_TMP_DIR; must be writable and executable by the shell user. */
+     val prootTmp get() = File(base, ".tmp")
+ 
++    /** Shell daemon serving [packageName]: per-package root (unchanged for upstream Dextop). */
++    @Synchronized fun initializeShell(packageName: String) {
++        shellBase = File(moe.n4tsu.dextop.privilege.ShellPaths.linuxBase(packageName))
++    }
++
+     @Synchronized fun initializeAndroid(context: android.content.Context) {
+         check(android.system.Os.getuid() !in setOf(0, 2000))
+         val selected = File(context.noBackupFilesDir, "linux-android")
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHost.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHost.kt
+index 4b82eb3009f96b22fb30d1e8dc235a8f40197d48..5754cf0b4d00fd0c3a303435e0bf72470ba8b6f1 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHost.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHost.kt
+@@ -14,10 +14,29 @@ object LinuxServiceHost {
+     const val LIBRARY_PROPERTY = "moe.n4tsu.dextop.linux_library"
+     private const val APK_CHECK_MS = 5_000L
+     private var fontsInitialized = false
++    /** Application id this shell-side process serves (see [bindHost]); null inside the app process. */
++    @Volatile var hostPackage: String? = null
++        private set
++
++    /**
++     * Binds this shell/root process to the application it serves: launcher installer allow-list and the
++     * per-package Linux root. Called by [main] (embedded daemon) and by LinuxContainerService when Shizuku/Stellar
++     * host it as a UserService, where [main] never runs.
++     */
++    @JvmStatic @Synchronized fun bindHost(packageName: String) {
++        require(packageName.isNotBlank()) { "Empty application id" }
++        hostPackage = packageName
++        LinuxPaths.initializeShell(packageName)
++    }
++
++    /** Application id a service running as [uid] serves: shell/root only, preferring its Context's package. */
++    @JvmStatic fun shellHostPackage(uid: Int, contextPackage: String?, fallback: String): String? =
++        if (uid == 0 || uid == 2000) contextPackage?.takeIf { it.isNotBlank() } ?: fallback else null
+ 
+     @JvmStatic fun main(arguments: Array<String>) {
+         require(arguments.size == 3) { "Expected package, APK and native library directory" }
+         val (packageName, apk, nativeDirectory) = arguments
++        bindHost(packageName)
+         System.setProperty(LIBRARY_PROPERTY, File(nativeDirectory, "libdextop_linux.so").absolutePath)
+         Looper.prepareMainLooper()
+         HiddenApiBypass.addHiddenApiExemptions("Landroid/app/", "Landroid/content/", "Landroid/os/",
+@@ -82,7 +101,8 @@ object LinuxServiceHost {
+         "CLASSPATH=${quote(apk)} nohup /system/bin/setsid /system/bin/app_process /system/bin " +
+             "--nice-name=${quote("$packageName:dextop_linux_embedded")} " +
+             "moe.n4tsu.dextop.linux.LinuxServiceHost ${quote(packageName)} ${quote(apk)} ${quote(nativeDirectory)} " +
+-            ">/data/local/tmp/dextop-linux-embedded.log 2>&1 </dev/null &"
++            ">/data/local/tmp/${moe.n4tsu.dextop.privilege.ShellPaths.prefix(packageName)}-linux-embedded.log " +
++            "2>&1 </dev/null &"
+ 
+     private fun quote(value: String) = "'" + value.replace("'", "'\\''") + "'"
+ }
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxSessionService.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxSessionService.kt
+index d87c2ebd8ed99ba722cf23099c93107ee198d541..bd8ac1a189770369cf7e4cbbb033945dd83b7f08 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxSessionService.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxSessionService.kt
+@@ -134,7 +134,7 @@ class LinuxSessionService : Service(), LinuxContainerClient.Listener {
+         val text = if (apps.isEmpty()) t("実行中のアプリはありません", "No apps running")
+             else moe.n4tsu.dextop.InlineStrings.format(t("実行中のアプリ {0} 個: ", "{0} apps running: "), apps.size) + apps.joinToString(", ")
+         val open = PendingIntent.getActivity(this, 0,
+-            packageManager.getLaunchIntentForPackage(packageName)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
++            moe.n4tsu.dextop.DextopLaunchIntent.forOwnUi(this)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                 ?: Intent(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+         return Notification.Builder(this, CHANNEL_RUNNING)
+             .setSmallIcon(moe.n4tsu.dextop.R.drawable.ic_qs_dextop)
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxStoreJobs.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxStoreJobs.kt
+index 3e04ef178979515a0820bfc5315e28cbee8e2924..989134faa82c8f32f0d98bf21d4fa54874c6a593 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxStoreJobs.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxStoreJobs.kt
+@@ -85,7 +85,7 @@ internal object LinuxStoreJobs {
+                     else -> text("インストール中", "Installing")
+                 } + if (job.percent >= 0) " ${job.percent.coerceIn(0, 100)}%" else ""
+             }
+-            val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
++            val intent = moe.n4tsu.dextop.DextopLaunchIntent.forOwnUi(context)
+             val pending = intent?.let { android.app.PendingIntent.getActivity(context, job.notificationId, it,
+                 android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE) }
+             val notification = android.app.Notification.Builder(context, channel)
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedPairingNotification.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedPairingNotification.kt
+index b5d18f243366a8ef288979855a4b283682e96ef4..2e3fd6217959cec0a71790dbbc545896f2c3b66a 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedPairingNotification.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedPairingNotification.kt
+@@ -145,7 +145,7 @@ internal object EmbeddedPairingNotification {
+         ensureChannel(context)
+         manager(context).cancel(notificationId)
+         // Tapping it returns to Dextop, where the setup page shows the result.
+-        val open = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
++        val open = moe.n4tsu.dextop.DextopLaunchIntent.forOwnUi(context)?.let {
+             PendingIntent.getActivity(context, 2, it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE)
+         }
+         manager(context).notify(
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedServerPayload.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedServerPayload.kt
+index a2e4bfb9656b78f09b12f1b84f31440023603754..23581cb85150fed1523a595d49dc7a563ee5c3bc 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedServerPayload.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedServerPayload.kt
+@@ -10,7 +10,8 @@ internal object EmbeddedServerPayload {
+         val abi = Build.SUPPORTED_ABIS.firstOrNull {
+             it in setOf("arm64-v8a", "armeabi-v7a", "x86_64")
+         } ?: "arm64-v8a"
+-        val nativeDirectory = "/data/local/tmp/dextop-input-$abi"
++        val shellPrefix = ShellPaths.prefix(context.packageName)
++        val nativeDirectory = "/data/local/tmp/$shellPrefix-input-$abi"
+         val nativeLibrary = "$nativeDirectory/libdextop_input.so"
+         val archiveEntry = "lib/$abi/libdextop_input.so"
+         // app_process does not inherit the app's native-library namespace. Extract
+@@ -22,7 +23,7 @@ internal object EmbeddedServerPayload {
+             "nohup /system/bin/setsid /system/bin/app_process /system/bin " +
+             "moe.n4tsu.dextop.privilege.EmbeddedPrivilegeServer ${shellQuote(context.packageName)} " +
+             "${shellQuote(nativeLibrary)} " +
+-            ">/data/local/tmp/dextop-embedded.log 2>&1 </dev/null &"
++            ">/data/local/tmp/$shellPrefix-embedded.log 2>&1 </dev/null &"
+     }
+ 
+     private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/ShellPaths.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/ShellPaths.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..747760308f82ce2788ec787d2a28449da038ed7e
+--- /dev/null
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/ShellPaths.kt
+@@ -0,0 +1,17 @@
++package moe.n4tsu.dextop.privilege
++
++/**
++ * Names under the shell-owned /data/local/tmp. Upstream Dextop keeps its historical names;
++ * any other application id (a fork) gets its own prefix so both can be installed side by side
++ * without overwriting each other's extracted libraries, logs or Linux containers.
++ */
++object ShellPaths {
++    private val upstreamPackages = setOf("moe.n4tsu.dextop", "moe.n4tsu.gpdextop")
++
++    /** "dextop" for upstream Dextop, "dextop-<packageName>" for any other application id. */
++    @JvmStatic fun prefix(packageName: String): String =
++        if (packageName in upstreamPackages) "dextop" else "dextop-$packageName"
++
++    /** Shell-side Linux data root of [packageName]: /data/local/tmp/dextop/linux for upstream. */
++    @JvmStatic fun linuxBase(packageName: String): String = "/data/local/tmp/${prefix(packageName)}/linux"
++}
+diff --git a/android/app/src/test/kotlin/moe/n4tsu/dextop/CardCompanionForkTrustTest.kt b/android/app/src/test/kotlin/moe/n4tsu/dextop/CardCompanionForkTrustTest.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..b3d369c29c5ef18be172d85923c43d0a6fe3a4d8
+--- /dev/null
++++ b/android/app/src/test/kotlin/moe/n4tsu/dextop/CardCompanionForkTrustTest.kt
+@@ -0,0 +1,39 @@
++package moe.n4tsu.dextop
++
++import kotlin.test.Test
++import kotlin.test.assertEquals
++import kotlin.test.assertFalse
++import kotlin.test.assertTrue
++
++/** A fork trusts only its own companions signed with its own keys. */
++class CardCompanionForkTrustTest {
++    private val official = "847833703f59daa31c28705ae694f1ceb11b6d0d4d1e93a5997c01a5303c34c5"
++    private val forkCertificate = "ab12"
++    private val forkPackages = setOf("com.eggman.backstage.cardex", "com.eggman.backstage.cardex.driving")
++
++    @Test fun withoutForkCertificatesTheOfficialIdentityApplies() {
++        val (packages, certificates) = CardCompanionCallerVerifier.trustedIdentity(forkPackages, " , ")
++        assertTrue("moe.n4tsu.dextop.cardex" in packages)
++        assertTrue(official in certificates)
++    }
++
++    @Test fun forkTrustsOnlyItsOwnPackagesAndCertificates() {
++        val (packages, certificates) = CardCompanionCallerVerifier.trustedIdentity(forkPackages + "", " AB12 ")
++        assertEquals(forkPackages, packages)
++        assertEquals(setOf(forkCertificate), certificates)
++        fun trusted(callerPackages: Set<String>, callerCertificate: String) =
++            CardCompanionCallerVerifier.matchesIdentity(callerPackages, setOf(callerCertificate), packages, certificates)
++        assertTrue(trusted(setOf("com.eggman.backstage.cardex"), "AB12"))
++        assertTrue(trusted(setOf("com.eggman.backstage.cardex.driving"), forkCertificate))
++        // Official companion, official certificate, or a fork package signed by somebody else: all refused.
++        assertFalse(trusted(setOf("moe.n4tsu.dextop.cardex"), official))
++        assertFalse(trusted(setOf("moe.n4tsu.dextop.cardex"), forkCertificate))
++        assertFalse(trusted(setOf("com.eggman.backstage.cardex"), official))
++        assertFalse(trusted(setOf("com.eggman.backstage.cardex.fake"), forkCertificate))
++    }
++
++    @Test fun officialMatchIsUnchangedForUpstreamBuilds() {
++        assertTrue(CardCompanionCallerVerifier.matchesOfficialIdentity(setOf("moe.n4tsu.dextop.cardex"), setOf(official)))
++        assertFalse(CardCompanionCallerVerifier.matchesOfficialIdentity(forkPackages, setOf(official)))
++    }
++}
+diff --git a/android/app/src/test/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHostForkTest.kt b/android/app/src/test/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHostForkTest.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d324eec6d9ccc73a490abc4e9f85f8616c8f867
+--- /dev/null
++++ b/android/app/src/test/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHostForkTest.kt
+@@ -0,0 +1,27 @@
++package moe.n4tsu.dextop.linux
++
++import kotlin.test.Test
++import kotlin.test.assertEquals
++import kotlin.test.assertNull
++
++/** Backstage (fork identity): a UserService-hosted service binds the per-package root too. */
++class LinuxServiceHostForkTest {
++    @Test fun shellHostedServicesServeTheirOwnApplicationId() {
++        assertEquals("com.eggman.backstage", LinuxServiceHost.shellHostPackage(2000, null, "com.eggman.backstage"))
++        assertEquals("com.eggman.backstage", LinuxServiceHost.shellHostPackage(0, "com.eggman.backstage", "moe.n4tsu.dextop"))
++        assertEquals("moe.n4tsu.dextop", LinuxServiceHost.shellHostPackage(2000, " ", "moe.n4tsu.dextop"))
++        assertNull(LinuxServiceHost.shellHostPackage(10_123, "com.eggman.backstage", "com.eggman.backstage"))
++    }
++
++    @Test fun bindHostSelectsThePerPackageLinuxRoot() {
++        try {
++            LinuxServiceHost.bindHost("com.eggman.backstage")
++            assertEquals("com.eggman.backstage", LinuxServiceHost.hostPackage)
++            assertEquals(java.io.File("/data/local/tmp/dextop-com.eggman.backstage/linux"), LinuxPaths.base)
++            assertEquals(java.io.File("/data/local/tmp/dextop-com.eggman.backstage/linux/containers"), LinuxPaths.containers)
++        } finally {
++            LinuxServiceHost.bindHost("moe.n4tsu.dextop")
++        }
++        assertEquals(java.io.File("/data/local/tmp/dextop/linux"), LinuxPaths.base)
++    }
++}
+diff --git a/android/app/src/test/kotlin/moe/n4tsu/dextop/privilege/ShellPathsTest.kt b/android/app/src/test/kotlin/moe/n4tsu/dextop/privilege/ShellPathsTest.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..bcf63fa6907c8529d4df046a2f73f58044fb4185
+--- /dev/null
++++ b/android/app/src/test/kotlin/moe/n4tsu/dextop/privilege/ShellPathsTest.kt
+@@ -0,0 +1,17 @@
++package moe.n4tsu.dextop.privilege
++
++import kotlin.test.Test
++import kotlin.test.assertEquals
++
++class ShellPathsTest {
++    @Test fun upstreamKeepsHistoricalNames() {
++        assertEquals("dextop", ShellPaths.prefix("moe.n4tsu.dextop"))
++        assertEquals("dextop", ShellPaths.prefix("moe.n4tsu.gpdextop"))
++        assertEquals("/data/local/tmp/dextop/linux", ShellPaths.linuxBase("moe.n4tsu.dextop"))
++    }
++
++    @Test fun forksGetTheirOwnNames() {
++        assertEquals("dextop-com.eggman.backstage", ShellPaths.prefix("com.eggman.backstage"))
++        assertEquals("/data/local/tmp/dextop-com.eggman.backstage/linux", ShellPaths.linuxBase("com.eggman.backstage"))
++    }
++}
+diff --git a/lib/app_info.dart b/lib/app_info.dart
+index 783a75b86d13d84d0b1939c59c74ca4fcb149479..e8155171b8fdd3bbe36c20dc9e86ae96d060f654 100644
+--- a/lib/app_info.dart
++++ b/lib/app_info.dart
+@@ -175,10 +175,12 @@ class AppInfoPage extends StatelessWidget {
+               ListTile(
+                 leading: Icon(Icons.code_rounded),
+                 title: Text(currentLocalizations().uiGitHub),
+-                subtitle: Text(currentLocalizations().uiGitHubRepository),
++                subtitle: Text('TheEggmanEmpire/Backstage'),
+                 trailing: Icon(Icons.open_in_new_rounded),
+                 onTap: () =>
+-                    bridge.openUrl('https://github.com/NarYuki/Dextop'),
++                    bridge.openUrl(
++                      'https://github.com/TheEggmanEmpire/Backstage',
++                    ),
+               ),
+               ListTile(
+                 leading: Icon(Icons.description_outlined),
+diff --git a/lib/home_screen.dart b/lib/home_screen.dart
+index cb4aa3f69dc771d60ba81ef1d8951168c4f759f6..d29cc378d70fe7903f8066ee25af7792a30697f4 100644
+--- a/lib/home_screen.dart
++++ b/lib/home_screen.dart
+@@ -356,11 +356,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+   String? releaseCheckError;
+   DateTime? releaseCheckedAt;
+   AppUpdateInfo? playUpdateInfo;
+-  // Product flavors live on the Android side. A Gradle BuildConfig field is
+-  // not a Dart --define, so String.fromEnvironment would always fall back to
+-  // GitHub in normal Play builds. Populate this from the native status map.
+-  String distributionChannel = 'github';
+-  bool get isPlayDistribution => distributionChannel == 'play';
+   bool get updateAvailable => latestReleaseVersion != null;
+   var secureSettingsGranted = false;
+   String? error;
+@@ -639,12 +634,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+       client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+       final request = await client.getUrl(
+         Uri.parse(
+-          'https://api.github.com/repos/NarYuki/Dextop/releases/latest',
++          'https://api.github.com/repos/TheEggmanEmpire/Backstage/releases/latest',
+         ),
+       );
+       request.headers
+         ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
+-        ..set(HttpHeaders.userAgentHeader, 'Dextop/$current')
++        ..set(HttpHeaders.userAgentHeader, 'Backstage/$current')
+         ..set('X-GitHub-Api-Version', '2022-11-28');
+       final response = await request.close().timeout(
+         const Duration(seconds: 8),
+@@ -1072,7 +1067,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+         privilegeProvider = '${value['privilegeProvider'] ?? 'stellar'}';
+         privilegeProviderName =
+             '${value['privilegeProviderName'] ?? 'Stellar'}';
+-        distributionChannel = '${value['distributionChannel'] ?? 'github'}';
+         secureSettingsGranted = value['privileged'] == true;
+         manufacturer = '${value['manufacturer'] ?? ''}';
+         model = '${value['model'] ?? ''}';

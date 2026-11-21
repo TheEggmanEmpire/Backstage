@@ -1,0 +1,157 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TheEggmanEmpire <backstage@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] backstage-updater
+
+Share Backstage's rate-limited native release check with Home and open the verified in-app installation flow.
+---
+ lib/home_screen.dart             | 80 ++++++--------------------------
+ test/backstage_updater_test.dart | 18 +++++++
+ 2 files changed, 32 insertions(+), 66 deletions(-)
+ create mode 100644 test/backstage_updater_test.dart
+
+diff --git a/lib/home_screen.dart b/lib/home_screen.dart
+index 4332d6d39f8c2a91ce171f0e636fc36e35fe2ca0..5e2abca1ab62706e4289884b6b5a3d1e86807644 100644
+--- a/lib/home_screen.dart
++++ b/lib/home_screen.dart
+@@ -627,50 +627,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+         releaseCheckError = null;
+       });
+     }
+-    HttpClient? client;
+     try {
+-      final status = await bridge.status();
+-      final current = '${status['appVersion'] ?? ''}'.trim();
+-      if (current.isEmpty) throw const FormatException('Missing app version');
+-      client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+-      final request = await client.getUrl(
+-        Uri.parse(
+-          'https://api.github.com/repos/TheEggmanEmpire/Backstage/releases/latest',
+-        ),
+-      );
+-      request.headers
+-        ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
+-        ..set(HttpHeaders.userAgentHeader, 'Backstage/$current')
+-        ..set('X-GitHub-Api-Version', '2022-11-28');
+-      final response = await request.close().timeout(
+-        const Duration(seconds: 8),
+-      );
+-      if (response.statusCode != HttpStatus.ok) {
+-        throw HttpException('GitHub API returned ${response.statusCode}');
+-      }
+-      final payload = jsonDecode(await response.transform(utf8.decoder).join());
+-      if (payload is! Map) {
+-        throw const FormatException('Invalid GitHub response');
+-      }
+-      final latest = '${payload['tag_name'] ?? ''}'.replaceFirst(
+-        RegExp(r'^[vV]'),
+-        '',
++      final result = await BackstageShellBridge.invoke<Map>(
++        'checkUpdates', {'manual': manual},
+       );
+-      if (latest.isEmpty) {
+-        throw const FormatException('Missing release version');
+-      }
+-      final url = '${payload['html_url'] ?? ''}';
+-      final newer = _isNewerVersion(latest, current);
++      if (result == null) throw const FormatException('Updater unavailable');
++      if (result['enabled'] != true) return;
++      if (result['error'] != null) throw FormatException('${result['error']}');
++      final latest = result['latest'] as String?;
+       if (!mounted) return;
+       mutate(() {
+         fetchedReleaseVersion = latest;
+-        latestReleaseVersion = newer ? latest : null;
+-        latestReleaseUrl =
+-            latestReleaseVersion != null &&
+-                url.startsWith('https://github.com/')
+-            ? url
+-            : null;
+-        releaseCheckedAt = DateTime.now();
++        latestReleaseVersion = result['newer'] == true ? latest : null;
++        latestReleaseUrl = latestReleaseVersion == null ? null : 'backstage://updates';
++        releaseCheckedAt = DateTime.fromMillisecondsSinceEpoch(
++          (result['checkedAt'] as num?)?.toInt() ?? 0,
++        );
+         releaseCheckSucceeded = true;
+       });
+       if (manual && updateAvailable) await _showUpdateDialog();
+@@ -683,12 +655,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+         });
+       }
+     } finally {
+-      client?.close(force: true);
+       if (mounted) mutate(() => releaseChecking = false);
+     }
+   }
+ 
+-  // Backstage ships no Google Play Core: every build checks this repository's GitHub releases.
++  // Home shares the native updater used by the app settings.
+   Future<void> _checkForUpdates({bool manual = false}) =>
+       _checkLatestGitHubRelease(manual: manual);
+ 
+@@ -712,38 +683,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+             FilledButton(
+               onPressed: () {
+                 Navigator.pop(dialogContext);
+-                bridge.openUrl(latestReleaseUrl!);
++                BackstageShellBridge.invoke<bool>('openUpdates');
+               },
+-              child: Text(l.openOnGitHub),
++              child: const Text('Update'),
+             ),
+         ],
+       ),
+     );
+   }
+ 
+-  bool _isNewerVersion(String candidate, String current) {
+-    List<int> parts(String value) {
+-      final normalized = value.split('-').first.split('+').first;
+-      return normalized
+-          .split('.')
+-          .map(
+-            (part) =>
+-                int.tryParse(RegExp(r'\d+').stringMatch(part) ?? '0') ?? 0,
+-          )
+-          .toList();
+-    }
+-
+-    final latestParts = parts(candidate);
+-    final currentParts = parts(current);
+-    final length = max(latestParts.length, currentParts.length);
+-    for (var index = 0; index < length; index++) {
+-      final latestPart = index < latestParts.length ? latestParts[index] : 0;
+-      final currentPart = index < currentParts.length ? currentParts[index] : 0;
+-      if (latestPart != currentPart) return latestPart > currentPart;
+-    }
+-    return false;
+-  }
+-
+   Future<void> _consumeTileAction() async {
+     if (!mounted || !await bridge.consumeTileAction()) return;
+     await loadHomeWorkspaces();
+diff --git a/test/backstage_updater_test.dart b/test/backstage_updater_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..26d27af62bf2ee5153bcbef5db0d4ec647ca1a59
+--- /dev/null
++++ b/test/backstage_updater_test.dart
+@@ -0,0 +1,18 @@
++import 'dart:io';
++import 'package:flutter_test/flutter_test.dart';
++
++void main() {
++  test('Home uses the shared native updater', () {
++    final source = File('lib/home_screen.dart').readAsStringSync();
++    final checker = source.substring(source.indexOf('Future<void> _checkLatestGitHubRelease'),
++        source.indexOf('Future<void> _showUpdateDialog'));
++    expect(checker, contains("'checkUpdates'"));
++    expect(checker, isNot(contains('HttpClient')));
++    expect(checker, isNot(contains('api.github.com')));
++    final dialog = source.substring(source.indexOf('Future<void> _showUpdateDialog'),
++        source.indexOf('Future<void> _consumeTileAction'));
++    expect(dialog, contains("'openUpdates'"));
++    expect(dialog, isNot(contains('bridge.openUrl')));
++    expect(source, isNot(contains('_isNewerVersion')));
++  });
++}

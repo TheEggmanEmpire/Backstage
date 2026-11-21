@@ -1,0 +1,205 @@
+name: Upstream canary
+
+# Daily (and on demand): rebase the Backstage patch series onto upstream Dextop `main` and its newest
+# version tag with scripts/update-upstream.sh (git am onto the old pin + rebase --onto with the committed
+# rerere cache), then run every gate on the result. A conflict or a red gate turns the canary red.
+#
+# Security split (untrusted upstream code is built and tested here):
+#   * job `canary` runs that code with a READ-ONLY token and no secrets; it uploads only the generated
+#     upstream/, patches/, toolchain.env and a report as an artifact;
+#   * job `publish` has write permissions but never executes upstream code or scripts from the artifact:
+#     it checks the artifact's file list and ref name, unpacks it over a checkout of the default branch,
+#     commits it with `git add -f` and opens a pull request (newest tag only) or an issue (conflicts /
+#     failed gates);
+#   * caches are a write channel too (Flutter SDK, pub and Gradle caches saved on the default branch are restored
+#     by later main and tag builds, the signed release included), so `canary` runs with every cache off: it
+#     neither restores nor saves one.
+# Note: a pull request opened with the default GITHUB_TOKEN does not trigger build.yml; re-run the checks on it
+# (or give create-pull-request a GitHub App / fine-grained token) before merging a bump.
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Upstream ref: main, latest-tag, a tag or a commit id'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: Canary ${{ matrix.ref }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(github.event.inputs.ref && format('["{0}"]', github.event.inputs.ref) || '["main","latest-tag"]') }}
+    env:
+      REF: ${{ matrix.ref }}
+      # arm64 only: an all-ABI debug build does not fit on the runner's disk.
+      BACKSTAGE_TARGET_PLATFORM: android-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Rebase the patch series onto ${{ matrix.ref }}
+        id: update
+        run: |
+          set +e
+          # --test fast: check-patches + the glue symbol check (seconds); the heavy gates run in the next steps.
+          scripts/update-upstream.sh --test fast "$REF" 2>&1 | tee build-update.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          mkdir -p canary
+          changed=1
+          if git diff --quiet -- upstream patches toolchain.env && [ -z "$(git ls-files --others --exclude-standard -- upstream patches)" ]; then changed=0; fi
+          if [ "$rc" -eq 2 ]; then status=conflict
+          elif [ "$rc" -ne 0 ] && [ "$changed" = 1 ]; then status=red   # bumped, but a fast gate (e.g. glue symbols) failed
+          elif [ "$rc" -ne 0 ]; then status=error
+          elif [ "$changed" = 0 ]; then status=noop
+          else status=updated; fi
+          cp build/upstream-rebase.report.md canary/REPORT.md 2>/dev/null || cp build-update.log canary/REPORT.md
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "Canary status for $REF: $status"
+
+      - name: Free disk space (preinstalled toolchains the build never uses; keeps the Android SDK)
+        if: steps.update.outputs.status == 'updated'
+        run: scripts/ci-free-disk-space.sh
+
+      - uses: ./.github/actions/setup-toolchain
+        if: steps.update.outputs.status == 'updated'
+        with:
+          # Untrusted upstream code runs below: it must never save a cache that a trusted job restores.
+          cache: 'off'
+
+      - name: Gates on the updated tree
+        id: verify
+        if: steps.update.outputs.status == 'updated'
+        continue-on-error: true
+        run: |
+          scripts/test.sh --only library
+          scripts/prepare-work-tree.sh
+          scripts/test.sh --only flutter --no-prepare
+          scripts/build-apk.sh debug --no-prepare
+          scripts/ci-free-disk-space.sh --build-outputs
+          scripts/test.sh --only android --no-prepare
+
+      - name: Package the generated series (no build outputs)
+        if: always()
+        run: |
+          status='${{ steps.update.outputs.status }}'
+          if [ "$status" = updated ] && [ '${{ steps.verify.outcome }}' != success ]; then status=red; fi
+          echo "$status" > canary/status
+          echo "$REF" > canary/ref
+          {
+            echo; echo "## Gates (CI)"; echo
+            case "$status" in
+              updated) echo "check-patches, library tests, flutter test, debug build and Android unit tests passed." ;;
+              red) echo "**Gates FAILED** on the updated tree: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" ;;
+              *) echo "Not run (status: $status)." ;;
+            esac
+          } >> canary/REPORT.md
+          if [ "$status" = updated ] || [ "$status" = red ]; then tar -czf canary/series.tar.gz upstream patches toolchain.env; fi
+          # The run page shows the report (status, hot spots, conflicts, next steps) without opening the artifact.
+          { echo "# Upstream canary: $REF -> $status"; echo; cat canary/REPORT.md; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canary-${{ strategy.job-index }}
+          path: canary/
+          if-no-files-found: error
+
+      - name: Red canary
+        if: steps.update.outputs.status == 'conflict' || steps.update.outputs.status == 'error' || steps.update.outputs.status == 'red' || steps.verify.outcome == 'failure'
+        run: |
+          cat canary/REPORT.md
+          exit 1
+
+  publish:
+    name: Pull request / issue
+    needs: canary
+    # Scheduled runs always run on the default branch, and their event payload has no `repository` object
+    # (github.event.repository.default_branch is empty there): test the event name, not the payload.
+    if: always() && (github.event_name == 'schedule' || github.ref_name == github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: canary-*
+          path: canary
+
+      - name: Check and unpack the newest-tag result
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr=none
+          for dir in canary/canary-*; do
+            [ -f "$dir/status" ] || continue
+            ref=$(cat "$dir/ref"); status=$(cat "$dir/status")
+            # The artifact is produced next to untrusted upstream code: accept only plain ref names here.
+            if ! [[ "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}$ ]]; then
+              echo "::error::unexpected ref in $dir"; exit 1
+            fi
+            if [ "$status" = conflict ] || [ "$status" = error ] || [ "$status" = red ]; then
+              title="Upstream canary: $status on $ref"
+              number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+              if [ -n "$number" ]; then gh issue comment "$number" --body-file "$dir/REPORT.md"
+              else gh issue create --title "$title" --body-file "$dir/REPORT.md" --label upstream-sync || gh issue create --title "$title" --body-file "$dir/REPORT.md"; fi
+            fi
+            # Bump PRs only for a released upstream version (main is an early warning only).
+            if [ "$status" = updated ] && [ "$ref" != main ]; then
+              # Only our generated paths, no symlinks/devices/absolute or parent paths.
+              tar -tzvf "$dir/series.tar.gz" | awk '{print substr($1,1,1)}' | grep -qv '^[-d]$' && { echo "::error::unexpected entry type"; exit 1; }
+              tar -tzf "$dir/series.tar.gz" | grep -Ev '^(upstream/|patches/|toolchain\.env$)' | grep -q . && { echo "::error::unexpected path in artifact"; exit 1; }
+              tar -tzf "$dir/series.tar.gz" | grep -E '(^/|(^|/)\.\.(/|$))' && { echo "::error::unsafe path"; exit 1; }
+              rm -rf upstream patches toolchain.env
+              tar -xzf "$dir/series.tar.gz" --no-same-owner --no-same-permissions
+              cp "$dir/REPORT.md" "$RUNNER_TEMP/REPORT.md"
+              pr=$ref
+            fi
+          done
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      # Committed here with `git add -f`: upstream's own.gitignore files (and ours) apply inside upstream/dextop,
+      # and a plain `git add` would silently drop an upstream file that matches one of them.
+      - name: Commit the bump
+        if: steps.pick.outputs.pr != 'none'
+        env:
+          PR_REF: ${{ steps.pick.outputs.pr }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A -f upstream patches toolchain.env
+          git commit -q -m "Update upstream Dextop to $PR_REF"
+
+      - name: Open pull request
+        if: steps.pick.outputs.pr != 'none'
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
+        with:
+          branch: upstream-bump/${{ steps.pick.outputs.pr }}
+          delete-branch: true
+          commit-message: Update upstream Dextop to ${{ steps.pick.outputs.pr }}
+          title: Update upstream Dextop to ${{ steps.pick.outputs.pr }}
+          body-path: ${{ runner.temp }}/REPORT.md
+          labels: upstream-sync

@@ -1,0 +1,76 @@
+package moe.n4tsu.dextop.privilege
+
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.database.Cursor
+import android.net.Uri
+import android.os.Bundle
+import android.os.Binder
+import android.os.Process
+import moe.n4tsu.dextop.BuildConfig
+import moe.n4tsu.dextop.PrivilegedAccess
+import moe.n4tsu.dextop.linux.LinuxServiceHost
+import moe.n4tsu.dextop.linux.LinuxContainerClient
+
+/** Receives only the Binder created by Dextop's own shell process. */
+class EmbeddedPrivilegeProvider : ContentProvider() {
+    private val lifecycleBinder = Binder()
+
+    override fun onCreate(): Boolean = true
+
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
+        val shellCaller = Binder.getCallingUid() == Process.SHELL_UID
+        if (shellCaller && method == LinuxServiceHost.PUBLISH_METHOD && extras != null) {
+            val currentContext = requireNotNull(context)
+            val outdated = arg != currentContext.applicationInfo.sourceDir
+            val binder = extras.getBinder(EmbeddedPrivilegeProtocol.providerBinder)
+            val accepted = !outdated && binder?.isBinderAlive == true
+            if (accepted) LinuxContainerClient.acceptEmbeddedService(currentContext, binder!!)
+            return Bundle().apply {
+                putBoolean("accepted", accepted)
+                putBoolean("outdated", outdated)
+                putBinder(EmbeddedPrivilegeProtocol.providerLifecycleBinder, lifecycleBinder)
+            }
+        }
+        if (BuildConfig.DEBUG && shellCaller && method == "probeRuntime") {
+            val command = DistributionPrivilegeRuntime.execute(arrayOf("id"))
+            val rotation = runCatching {
+                val window = PrivilegedAccess("DextopEmbeddedProbe")
+                    .service("window", "android.view.IWindowManager")
+                window.javaClass.getMethod("getDefaultDisplayRotation").invoke(window) as Int
+            }
+            return Bundle().apply {
+                putBoolean("available", DistributionPrivilegeRuntime.available)
+                putBoolean("storedPairing", DistributionPrivilegeBootstrap.hasStoredPairing(requireNotNull(context)))
+                putInt("exitCode", command?.exitCode ?: -1)
+                putString("output", command?.output.orEmpty())
+                putString("error", command?.error.orEmpty())
+                putInt("rotation", rotation.getOrDefault(-1))
+                putString("binderError", rotation.exceptionOrNull()?.message.orEmpty())
+            }
+        }
+        if (!shellCaller || method != EmbeddedPrivilegeProtocol.providerMethod || extras == null) return null
+        val binder = extras.getBinder(EmbeddedPrivilegeProtocol.providerBinder) ?: return null
+        // Servers from an older APK, or extra servers started while one was still alive, retire
+        // instead of retrying forever; otherwise every app restart leaves one more behind.
+        val outdated = arg != null && arg != requireNotNull(context).applicationInfo.sourceDir
+        val retire = outdated || DistributionPrivilegeRuntime.servedByOther(binder)
+        val accepted = !retire && binder.isBinderAlive
+        if (accepted) {
+            DistributionPrivilegeRuntime.accept(binder)
+            EmbeddedPrivilegeKeeper.onRuntimeAccepted(requireNotNull(context))
+            LinuxContainerClient.onPrivilegeChanged()
+        }
+        return Bundle().apply {
+            putBoolean("accepted", accepted)
+            putBoolean("retire", retire)
+            putBinder(EmbeddedPrivilegeProtocol.providerLifecycleBinder, lifecycleBinder)
+        }
+    }
+
+    override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = null
+    override fun getType(uri: Uri): String? = null
+    override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+    override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+    override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+}

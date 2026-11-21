@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- English only on purpose (Backstage's own UI is English); only the shared navigation labels in bs_shell.xml are
+     translated, to match Dextop's localized bottom bar. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <!-- -->
+    <string name="bs_agent_label">Backstage</string>
+    <string name="bs_tile_label">Backstage voice</string>
+    <string name="bs_plugin_label">Backstage task</string>
+    <string name="bs_share_label">Ask Backstage</string>
+    <string name="bs_process_text_label">Ask Backstage</string>
+    <string name="bs_widget_listen_label">Backstage: speak</string>
+    <string name="bs_widget_listen_desc">Tap to give Backstage a voice command</string>
+    <string name="bs_widget_bubble_label">Backstage bubble</string>
+    <string name="bs_widget_bubble_desc">Show or hide the floating agent bubble</string>
+    <string name="bs_widget_quick_label">Backstage quick action</string>
+    <string name="bs_widget_quick_desc">Run one saved task with a tap</string>
+    <!-- / -->
+</resources>

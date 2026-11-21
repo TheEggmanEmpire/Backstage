@@ -1,0 +1,11 @@
+# Corresponding source of the prebuilt third-party binaries Backstage redistributes unchanged (NOTICE.md
+# "Prebuilt third-party binaries"). These live only on third-party servers, so every release mirrors them:
+# scripts/fetch-third-party-sources.sh downloads each file, checks the pinned SHA-256 and the release job of
+# .github/workflows/build.yml attaches them (plus SOURCES-SHA256SUMS) to the GitHub release.
+#
+# Columns (tab-separated): file name in the release | URL | SHA-256 ("-" = not pinned upstream; recorded per release) | covers
+DD-Turnip-v0.2.0-source.tar.xz	https://github.com/Droid-Deck/Drivers-CI/releases/download/DD-Turnip-v0.2.0/DD-Turnip-v0.2.0-source.tar.xz	-	libvulkan_dextop_turnip.so (Mesa 26.3.0-devel bffd919 + DD-Turnip patch set and build scripts)
+DD-Turnip-v0.3.3-source.tar.xz	https://github.com/Droid-Deck/Drivers-CI/releases/download/DD-Turnip-v0.3.3/DD-Turnip-v0.3.3-source.tar.xz	834054084604cacb2fe82d9151256bac83fd353d50b602f6824a1ce8ae73a3a8	the Linux GL/EGL/Zink bundle (android/app/src/main/resources/moe/n4tsu/dextop/linux/gpu/, Mesa c90ff43)
+DroidDeck-8aa1fdaf708eb44ef7cff7e493bda946989af511.tar.gz	https://github.com/Droid-Deck/DroidDeck/archive/8aa1fdaf708eb44ef7cff7e493bda946989af511.tar.gz	-	libpulse*.so, libprotocol-native.so, libsndfile.so, libltdl.so, libffi.so (prebuilt in that DroidDeck tree), DirectAudio sink
+DroidDeck-26ca374c47641fb8db8d1711c188ddb36a4a7877.tar.gz	https://github.com/Droid-Deck/DroidDeck/archive/26ca374c47641fb8db8d1711c188ddb36a4a7877.tar.gz	-	DroidDeck session scripts and preload, PRoot patches, adrenotools as vendored there
+pulseaudio-13.0.tar.xz	https://freedesktop.org/software/pulseaudio/releases/pulseaudio-13.0.tar.xz	961b23ca1acfd28f2bc87414c27bb40e12436efcf2158d29721b1e89f3f28057	module-native-protocol-tcp.so (built by upstream from PulseAudio v13.0) and the PulseAudio 13 libraries

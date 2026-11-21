@@ -1,0 +1,52 @@
+# Patterns are anchored on purpose: unanchored ones would also hide new files inside upstream/dextop/
+# after an upstream update (upstream/dextop/ carries its own .gitignore files for its own sources).
+
+# Build output: patched work tree, Gradle/Flutter outputs, update-upstream scratch worktree, logs
+/build/
+# Full-history upstream mirror used by scripts/update-upstream.sh (3-way + rerere)
+/.cache/
+/backstage/build/
+/backstage/.gradle/
+/backstage/.kotlin/
+/backstage/local.properties
+/backstage/android/build/
+/backstage/android/.cxx/
+/backstage/companion/build/
+
+# Runtime-bearing release APKs exceed GitHub's 100 MB git-file limit: publish them as GitHub Release assets.
+# Keep dist/SHA256SUMS committed; existing tracked APKs are retained in history.
+/dist/backstage-*-release.apk
+/dist/*-debug.apk
+/dist/*.apk.tmp
+/dist/*.idsig
+/dist/*.aab
+# Local pre-release test builds (not a delivered release)
+/dist/next/
+
+# Signing material and secrets: never commit (keys live outside the repository, e.g. ~/.backstage-keys/)
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+key.properties
+/.env
+/.env.*
+/backstage-keys/
+/keys/
+
+# IDE / OS
+/.idea/
+*.iml
+.DS_Store
+/local.properties
+/captures/
+
+# Legacy prototype outputs (app/ module retired)
+/app/build/
+/app/.cxx/
+/.gradle/
+/.kotlin/
+
+# Python bytecode (scripts/lib, scripts/tests)
+__pycache__/

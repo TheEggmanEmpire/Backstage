@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TheEggmanEmpire <backstage@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 22:00:00 +0000
+Subject: [PATCH] privilege-fallback
+
+Prefer Stellar, then Shizuku, then the embedded privilege runtime. Keep provider discovery and fallback selection consistent across the desktop and agent.
+---
+ .../kotlin/moe/n4tsu/dextop/MainActivity.kt   |  5 ++-
+ .../privilege/BackstagePrivilegeFallback.kt   | 41 ++++++++++++++++++
+ .../BackstagePrivilegeFallbackTest.kt         | 42 +++++++++++++++++++
+ 3 files changed, 86 insertions(+), 2 deletions(-)
+ create mode 100644 android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/BackstagePrivilegeFallback.kt
+ create mode 100644 android/app/src/test/kotlin/moe/n4tsu/dextop/privilege/BackstagePrivilegeFallbackTest.kt
+
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
+index ca1ce9684a148148ca60d38e4bb3950e3022cb00..c367d3580ee6e46fe354f4a6ff30783daabe4619 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
+@@ -952,6 +952,7 @@ open class MainActivity : FlutterActivity() {
+      */
+     private fun shouldUseEmbeddedRuntime(providers: List<PrivilegeProvider>): Boolean {
+         if (!DistributionPrivilegeBootstrap.included) return false
++        if (moe.n4tsu.dextop.privilege.BackstagePrivilegeFallback.useEmbedded(this)) return true
+         if (providers.isEmpty()) return true
+         val preferences = getSharedPreferences("dextop_privilege_provider", MODE_PRIVATE)
+         val lastMode = preferences.getString("last_mode", null)
+@@ -992,7 +993,7 @@ open class MainActivity : FlutterActivity() {
+                 )
+             }
+             .distinctBy { it.packageName }
+-            .sortedWith(compareBy<PrivilegeProvider> { it.kind == "stellar" }.thenBy { it.displayName })
++            .sortedWith(compareBy<PrivilegeProvider> { moe.n4tsu.dextop.privilege.BackstagePrivilegeFallback.providerPriority(it.kind) }.thenBy { it.displayName })
+             .toList()
+     }
+ 
+@@ -1003,7 +1004,7 @@ open class MainActivity : FlutterActivity() {
+             ?: providers.firstOrNull { saved == "stellar" && it.kind == "stellar" }
+             ?: providers.firstOrNull { saved == "shizuku" && it.kind == "shizuku" }
+             ?: providers.singleOrNull()
+-            ?: providers.firstOrNull { it.kind == "shizuku" }
++            ?: providers.firstOrNull { it.kind == moe.n4tsu.dextop.privilege.BackstagePrivilegeFallback.defaultKind() }
+             ?: providers.firstOrNull()
+         if (saved != null && providers.none { it.packageName == saved } && saved !in setOf("stellar", "shizuku")) {
+             preferences.edit().remove("selected").apply()
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/BackstagePrivilegeFallback.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/BackstagePrivilegeFallback.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..f0496bb6705b464f9f8ba71dabadbcae2d7622f7
+--- /dev/null
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/BackstagePrivilegeFallback.kt
+@@ -0,0 +1,41 @@
++package moe.n4tsu.dextop.privilege
++
++import android.content.Context
++import android.content.pm.PackageManager
++import rikka.shizuku.Shizuku
++
++/**
++ * Backstage (patch 0003-privilege-fallback): Stellar first, then Shizuku, the embedded wireless-ADB runtime as the fallback.
++ *
++ * Upstream turns the embedded runtime off for good as soon as an external provider (Shizuku, Stellar) is selected
++ * (MainActivity.shouldUseEmbeddedRuntime, re-evaluated in every onCreate/onResume). After a reboot a non-root provider
++ * stays stopped until the user starts it again, so a background desktop start had no privilege at all although a
++ * stored pairing of the embedded runtime existed. With [active] (set by the Backstage glue), the embedded runtime is
++ * used while the external provider is not usable (binder dead, or this app not granted) and a pairing is stored;
++ * the external provider takes over again as soon as it is usable. Inert in upstream builds ([active] false).
++ */
++object BackstagePrivilegeFallback {
++    @Volatile @JvmStatic var active = false
++
++    /** Keep upstream defaults while inactive; saved choices are resolved before this default in MainActivity. */
++    fun defaultKind(active: Boolean = this.active): String = if (active) "stellar" else "shizuku"
++
++    fun providerPriority(kind: String, active: Boolean = this.active): Int =
++        if ((kind == "stellar") == active) 0 else 1
++
++    /** Pure decision (unit-tested). */
++    fun useEmbedded(active: Boolean, included: Boolean, externalUsable: Boolean, storedPairing: () -> Boolean): Boolean =
++        active && included && !externalUsable && storedPairing()
++
++    /** Stellar (Shizuku compatibility layer enabled), or Shizuku is running and this app holds its permission. */
++    fun externalUsable(): Boolean = runCatching {
++        Shizuku.pingBinder() && !Shizuku.isPreV11() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
++    }.getOrDefault(false)
++
++    /** Hook in MainActivity.shouldUseEmbeddedRuntime: true = use the embedded runtime although a provider is selected. */
++    fun useEmbedded(context: Context): Boolean = useEmbedded(
++        active,
++        DistributionPrivilegeBootstrap.included,
++        externalUsable = active && externalUsable(),
++    ) { runCatching { DistributionPrivilegeBootstrap.hasStoredPairing(context) }.getOrDefault(false) }
++}
+diff --git a/android/app/src/test/kotlin/moe/n4tsu/dextop/privilege/BackstagePrivilegeFallbackTest.kt b/android/app/src/test/kotlin/moe/n4tsu/dextop/privilege/BackstagePrivilegeFallbackTest.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..05b58b2ebb6b92b1e48de1794c6c37cec03fc51f
+--- /dev/null
++++ b/android/app/src/test/kotlin/moe/n4tsu/dextop/privilege/BackstagePrivilegeFallbackTest.kt
+@@ -0,0 +1,42 @@
++package moe.n4tsu.dextop.privilege
++
++import kotlin.test.Test
++import kotlin.test.assertEquals
++import kotlin.test.assertFalse
++import kotlin.test.assertTrue
++
++class BackstagePrivilegeFallbackTest {
++    private fun decide(active: Boolean = true, included: Boolean = true, external: Boolean, paired: Boolean) =
++        BackstagePrivilegeFallback.useEmbedded(active, included, external) { paired }
++
++    @Test fun stellarDefaultsAreBackstageOnly() {
++        assertEquals("stellar", BackstagePrivilegeFallback.defaultKind(active = true))
++        assertEquals("shizuku", BackstagePrivilegeFallback.defaultKind(active = false))
++        assertTrue(BackstagePrivilegeFallback.providerPriority("stellar", true) <
++            BackstagePrivilegeFallback.providerPriority("shizuku", true))
++        assertTrue(BackstagePrivilegeFallback.providerPriority("shizuku", false) <
++            BackstagePrivilegeFallback.providerPriority("stellar", false))
++    }
++
++    @Test fun storedPairingServesWhileStellarOrShizukuIsUnusable() {
++        // After a reboot Stellar/Shizuku is stopped (or this app is not granted): the stored embedded pairing is the fallback.
++        assertTrue(decide(external = false, paired = true))
++    }
++
++    @Test fun usableExternalProviderAlwaysWins() {
++        assertFalse(decide(external = true, paired = true))
++    }
++
++    @Test fun nothingChangesWithoutAPairingOrInUpstreamBuilds() {
++        assertFalse(decide(external = false, paired = false))
++        assertFalse(decide(active = false, external = false, paired = true))
++        assertFalse(decide(included = false, external = false, paired = true))
++    }
++
++    @Test fun thePairingIsOnlyReadWhenItMatters() {
++        var reads = 0
++        BackstagePrivilegeFallback.useEmbedded(active = true, included = true, externalUsable = true) { reads++; true }
++        BackstagePrivilegeFallback.useEmbedded(active = false, included = true, externalUsable = false) { reads++; true }
++        assertTrue(reads == 0)
++    }
++}

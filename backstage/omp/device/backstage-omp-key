@@ -1,0 +1,18 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+set +x
+provider=${1:-}
+[[ $provider =~ ^[a-z0-9-]{1,64}$ ]] || exit 2
+broker=$HOME/.config/backstage-omp/broker
+[[ -r $broker ]] || { echo 'Open Backstage and run the setup line again' >&2; exit 1; }
+port= token=
+while IFS='=' read -r name value; do
+    case "$name" in port) port=$value;; token) token=$value;; esac
+done < "$broker"
+[[ $port =~ ^[0-9]{1,5}$ && $token =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo 'Pairing revoked: run the setup line again' >&2; exit 1; }
+# A pipe supplies the header: the credential never appears in curl's process arguments.
+key=$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl -q --noproxy '*' --config - -fsS --connect-timeout 1 --max-time 8 "http://127.0.0.1:$port/omp/v1/key/$provider" 2>/dev/null) || {
+    echo 'Open Backstage; pairing revoked: run the setup line again' >&2; exit 1;
+}
+[[ -n $key ]] || { echo 'Open Backstage and configure this provider' >&2; exit 1; }
+printf '%s\n' "$key"

@@ -1,0 +1,231 @@
+plugins {
+    id("com.android.application")
+    id("kotlin-android")
+    // Dextop Book's shell is built with Jetpack Compose's Material 3 Expressive.
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("dev.flutter.flutter-gradle-plugin")
+}
+
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
+val releaseEnvironment = mutableMapOf<String, String>()
+val environmentFile = rootProject.file("../.env")
+if (environmentFile.exists()) {
+    environmentFile.readLines().forEach { rawLine ->
+        val line = rawLine.trim()
+        if (line.isNotEmpty() && !line.startsWith("#") && line.contains('=')) {
+            val separator = line.indexOf('=')
+            releaseEnvironment[line.substring(0, separator).trim()] =
+                line.substring(separator + 1).trim().removeSurrounding("\"").removeSurrounding("'")
+        }
+    }
+}
+
+fun releaseValue(name: String): String? =
+    System.getenv(name)?.takeIf { it.isNotBlank() }
+        ?: releaseEnvironment[name]?.takeIf { it.isNotBlank() }
+
+val releaseKeystore = releaseValue("DEXTOP_KEYSTORE_FILE")
+val releaseAlias = releaseValue("DEXTOP_KEY_ALIAS")
+val releaseStorePassword = releaseValue("DEXTOP_STORE_PASSWORD")
+val releaseKeyPassword = releaseValue("DEXTOP_KEY_PASSWORD")
+val castReceiverAppId = releaseValue("DEXTOP_CAST_RECEIVER_APP_ID") ?: "BABD4047"
+val releaseSigningReady = listOf(
+    releaseKeystore, releaseAlias, releaseStorePassword, releaseKeyPassword
+).all { !it.isNullOrBlank() }
+
+android {
+    namespace = "moe.n4tsu.dextop"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_17.toString()
+    }
+
+    defaultConfig {
+        applicationId = "moe.n4tsu.dextop"
+        // Desktop windows and task descriptions require Android 13 or later.
+        minSdk = 33
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+        buildConfigField("String", "CAST_RECEIVER_APP_ID", "\"$castReceiverAppId\"")
+        buildConfigField("boolean", "EMBEDDED_STELLAR", "true")
+
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++20", "-Wall", "-Wextra", "-Werror=return-type")
+            }
+        }
+    }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            buildConfigField("String", "DISTRIBUTION_CHANNEL", "\"github\"")
+            buildConfigField("boolean", "EMBEDDED_STELLAR", "true")
+        }
+        create("play") {
+            dimension = "distribution"
+            applicationId = "moe.n4tsu.gpdextop"
+            buildConfigField("String", "DISTRIBUTION_CHANNEL", "\"play\"")
+            buildConfigField("boolean", "EMBEDDED_STELLAR", "true")
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+        aidl = true
+        compose = true
+    }
+
+    packaging {
+        resources {
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+        // Extract native libraries at install time: the Linux container's
+        // proot executables (libproot.so, libproot_loader.so) are run from
+        // nativeLibraryDir by the privileged shell.
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("release") {
+                storeFile = rootProject.file("../$releaseKeystore")
+                storePassword = releaseStorePassword
+                keyAlias = releaseAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (releaseSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+val generateNativeStrings by tasks.registering(Exec::class) {
+    group = "localization"
+    description = "Generates NativeStrings.kt from the Flutter ARB catalogs"
+    workingDir(rootProject.file(".."))
+    // Windows installs Python as python.exe; python3 there is the Store stub.
+    val python = if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3"
+    commandLine(python, "tool/generate_native_strings.py")
+    inputs.files(
+        fileTree(rootProject.file("../lib/l10n")) {
+            include("app_*.arb")
+            include("inline/*.json")
+        }
+    )
+    outputs.file(file("src/main/kotlin/moe/n4tsu/dextop/NativeStrings.kt"))
+    outputs.dir(file("src/main/resources/moe/n4tsu/dextop/l10n"))
+}
+
+tasks.configureEach {
+    if ((name.startsWith("compile") && name.endsWith("Kotlin")) ||
+        name.contains("SourceSetPaths")
+    ) {
+        dependsOn(generateNativeStrings)
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.packaging.jniLibs.excludes.addAll(
+            listOf(
+                "lib/armeabi-v7a/**",
+                "lib/x86/**",
+                "lib/x86_64/**"
+            )
+        )
+    }
+}
+
+dependencies {
+    implementation("com.caverock:androidsvg-aar:1.4")
+    implementation("androidx.window:window:1.5.1")
+    implementation("androidx.appcompat:appcompat:1.7.1")
+    // Material 3 Expressive (MaterialExpressiveTheme, floating toolbar, MaterialShapes) for Dextop Book.
+    implementation("androidx.compose.material3:material3:1.5.0-alpha18")
+    implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
+    implementation("androidx.media3:media3-muxer:1.10.1")
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
+    // Decompresses Linux container root filesystems (rootfs.tar.xz).
+    implementation("org.tukaani:xz:1.10")
+    implementation("org.apache.commons:commons-compress:1.28.0")
+    // 2.1.1 is the newest Kadb line compatible with this project's compileSdk 36.
+    implementation("com.flyfishxu:kadb:2.1.1")
+    // Signs the generated home-screen launchers of Linux applications on the device.
+    implementation("com.android.tools.build:apksig:8.11.1")
+    // Reads winget package manifests (YAML) for the Store's Windows applications.
+    implementation("org.snakeyaml:snakeyaml-engine:2.10")
+    // USB serial adapters for Linux (CDC-ACM, FTDI, CP210x, CH34x, PL2303) without a kernel driver.
+    implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
+    testImplementation(kotlin("test"))
+}
+
+tasks.configureEach {
+    if (name in setOf(
+            "packageGithubRelease",
+            "bundleGithubRelease",
+            "packagePlayRelease",
+            "bundlePlayRelease"
+        )) {
+        doFirst {
+            if (!releaseSigningReady) {
+                throw GradleException(
+                    "Release signing is not configured. Copy .env.example to .env and set DEXTOP_* values."
+                )
+            }
+        }
+    }
+}
+
+// The home-screen launcher template for Linux applications (see :linuxshortcut), shipped as an asset.
+val linuxShortcutAssets = layout.buildDirectory.dir("generated/linuxshortcut/assets")
+val copyLinuxShortcutTemplate by tasks.registering(Copy::class) {
+    dependsOn(":linuxshortcut:assembleRelease")
+    from(project(":linuxshortcut").layout.buildDirectory.dir("outputs/apk/release")) {
+        include("*.apk")
+        rename { "linux-shortcut-template.apk" }
+    }
+    into(linuxShortcutAssets)
+}
+android.sourceSets.getByName("main").assets.srcDir(linuxShortcutAssets)
+tasks.named("preBuild") { dependsOn(copyLinuxShortcutTemplate) }

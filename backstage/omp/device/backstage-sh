@@ -1,0 +1,66 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+set +x
+set +a   # a credential read below must never become a child-process environment entry
+umask 077
+usage() { echo "Usage: backstage-sh [--timeout SECONDS] ['COMMAND'] (or read command from stdin)" >&2; exit 2; }
+timeout=60
+if [[ ${1:-} == --timeout ]]; then
+    [[ $# -ge 2 && $2 =~ ^[0-9]{1,9}$ ]] || usage
+    timeout=$((10#$2))
+    shift 2
+fi
+[[ ${1:-} != --help && $# -le 1 ]] || usage
+broker=$HOME/.config/backstage-omp/broker
+[[ -r $broker ]] || { echo 'Open Backstage and run the setup line again' >&2; exit 1; }
+# An inherited exported variable must not turn the pairing token into a child-process environment entry.
+unset token
+port= token=
+while IFS='=' read -r name value; do
+    case "$name" in port) port=$value;; token) token=$value;; esac
+done < "$broker"
+[[ $port =~ ^[0-9]{1,5}$ && $token =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo 'Pairing revoked: run the setup line again' >&2; exit 1; }
+(( 10#$port >= 1024 && 10#$port <= 65535 )) || { echo 'Invalid broker port: run the setup line again' >&2; exit 1; }
+port=$((10#$port))
+[[ $timeout -ge 5 ]] || timeout=5
+[[ $timeout -le 300 ]] || timeout=300
+# Bun is installed by pairing; the relay itself needs no omp process, model or in-app runtime.
+bun=$HOME/.bun/bin/bun
+[[ -x $bun ]] || bun=$(type -P bun || :)
+[[ -n $bun && -x $bun ]] || { echo 'Bun is required for JSON: run the Termux setup line again' >&2; exit 1; }
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+if [[ $# == 1 ]]; then printf '%s' "$1" > "$stage/command"; else head -c 16385 > "$stage/command"; fi
+"$bun" -e '
+const command = await new Response(Bun.stdin.stream()).text();
+const body = JSON.stringify({command, timeout: Number(process.argv[1])});
+if (!command.trim() || command.includes("\u0000") || command.length > 4000 || Buffer.byteLength(body) > 8192) {
+  console.error("Command must be nonempty, at most 4000 characters / 8 KB JSON, without NUL"); process.exit(2);
+}
+process.stdout.write(body);
+' "$timeout" < "$stage/command" > "$stage/request.json"
+# Only this stdin config contains the token. No credential in curl argv, environment or diagnostics.
+status=$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
+    curl -q --noproxy '*' --config - -sS --connect-timeout 3 --max-time "$((timeout + 310))" \
+        -H 'Content-Type: application/json' --data-binary "@$stage/request.json" \
+        -o "$stage/response.json" -w '%{http_code}' "http://127.0.0.1:$port/omp/v1/shell" 2>/dev/null) || {
+    echo 'Shell relay unavailable: open Backstage and check pairing / privileged access' >&2; exit 1;
+}
+"$bun" -e '
+try {
+  const result = JSON.parse(await Bun.file(process.argv[1]).text());
+  if (process.argv[2] !== "200") {
+    console.error(typeof result.error === "string" ? result.error : "Shell request refused"); process.exit(1);
+  }
+  if (!Number.isInteger(result.exit_code) || result.exit_code < 0 || result.exit_code > 255 ||
+      typeof result.stdout !== "string" || typeof result.stderr !== "string") throw new Error();
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  process.exitCode = result.exit_code;
+} catch {
+  console.error(process.argv[2] !== "200"
+    ? "Shell relay refused (HTTP " + process.argv[2] + "): open Backstage; pairing revoked: run the setup line again"
+    : "Invalid response from Backstage shell relay");
+  process.exitCode = 1;
+}
+' "$stage/response.json" "$status"

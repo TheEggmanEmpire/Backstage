@@ -1,0 +1,258 @@
+// Backstage integration for upstream Dextop's:app module.
+//
+// Applied by ONE line that scripts/inject.sh appends to the work tree's android/app/build.gradle.kts
+// (marker "// backstage:app"); backstage/dextop-settings.gradle (injected into settings.gradle.kts) includes
+//:backstage and publishes gradle.ext.backstageRoot. Upstream build files are not patched for configuration (only
+// patches/0004 removes upstream's google-services plugin lines, which cannot be undone from outside).
+// Everything Backstage needs from the Dextop build lives here:
+//   *:backstage agent library dependency + Kotlin glue compiled into:app (sees Dextop's `internal`s)
+//   * per-flavor identity: applicationId, versionName/versionCode, label overlay, manifest overlay
+//   * release signing from BACKSTAGE_* environment variables (debug-key fallback only when none is set, loudly
+//     logged; optional certificate pin BACKSTAGE_EXPECT_CERT_SHA256); a release tag must match the version
+//   * the app's Car Companion trust pinned to this build's own certificate (no Car Companion is built)
+//   * R8 keep rules for the agent library and the glue
+//
+// Groovy on purpose: a script plugin with the dynamic DSL needs no Kotlin-DSL accessors or extra classpath.
+
+import java.security.KeyStore
+import java.security.MessageDigest
+
+// ---------------------------------------------------------------------------------------------- constants
+def backstageVersion = (findProperty('backstage.version') ?: '1.0.1').toString()
+// Release tags must match the configured version so installed apps can identify newer releases.
+// GitHub Actions sets GITHUB_REF_TYPE/GITHUB_REF_NAME; other builds are not affected.
+def releaseTag = System.getenv('GITHUB_REF_TYPE') == 'tag' ? (System.getenv('GITHUB_REF_NAME') ?: '') : ''
+if (releaseTag ==~ /v\d.*/ && releaseTag.substring(1) != backstageVersion) {
+    throw new GradleException("Backstage: tag ${releaseTag} does not match the backstage version ${backstageVersion}. " +
+            "Set the default version above in backstage/dextop-integration.gradle and tag that commit, or pass " +
+            "-Pbackstage.version=${releaseTag.substring(1)}.")
+}
+def backstageApplicationId = 'com.eggman.backstage'
+if (!gradle.ext.has('backstageRoot')) {
+    throw new GradleException('Backstage: backstage/dextop-settings.gradle was not applied (run scripts/prepare-work-tree.sh)')
+}
+def backstageRoot = new File(gradle.ext.backstageRoot.toString()).canonicalFile
+def overlayDir = new File(backstageRoot, 'backstage/overlay')
+def glueDir = new File(backstageRoot, 'backstage/dextop-glue/kotlin')
+def ompAssetsDir = new File(backstageRoot, 'build/omp-payload/assets')
+def ompManifest = new File(ompAssetsDir, 'omp/manifest.json')
+def skipOmpPayload = (findProperty('backstage.skipOmp')?.toString()?.toBoolean() ?: false) ||
+        System.getenv('BACKSTAGE_SKIP_OMP') == '1'
+// A missing/incomplete payload is omitted entirely from debug assets; a stale/corrupt one fails verification.
+def ompPayloadReady = false
+if (ompManifest.isFile()) {
+    try {
+        def manifest = new groovy.json.JsonSlurper().parse(ompManifest)
+        ompPayloadReady = manifest.files instanceof Map && !manifest.files.isEmpty() &&
+                manifest.files.keySet().every { new File(ompAssetsDir, "omp/${it}").isFile() }
+    } catch (Exception ignored) { /* variant's assets task below reports the missing payload */ }
+}
+
+def log = { String message -> logger.lifecycle("Backstage: ${message}") }
+
+// ------------------------------------------------------------------------------------- version + identity
+// versionName is the Backstage semantic version. Every Backstage patch release increments versionCode by 1000.
+// versionCode: ((major*100 + minor)*100 + patch)*1000 + upstream build number % 1000.
+def upstreamVersionName = flutter.versionName.toString()
+def upstreamVersionCode = (flutter.versionCode as Integer)
+def versionParts = backstageVersion.tokenize('.-+').take(3).collect { it.isInteger() ? it.toInteger() : 0 }
+while (versionParts.size() < 3) versionParts << 0
+def backstageVersionCode = ((versionParts[0] * 100 + versionParts[1]) * 100 + versionParts[2]) * 1000 +
+        (upstreamVersionCode % 1000)
+def backstageVersionName = backstageVersion
+
+project.ext.backstageVersionName = backstageVersionName
+project.ext.backstageVersionCode = backstageVersionCode
+
+// ------------------------------------------------------------------------------------------------ signing
+def env = System.getenv()
+def releaseKeystorePath = env['BACKSTAGE_KEYSTORE']
+def signingVariables = ['BACKSTAGE_KEYSTORE', 'BACKSTAGE_KEYSTORE_PASSWORD', 'BACKSTAGE_KEY_ALIAS', 'BACKSTAGE_KEY_PASSWORD']
+def missingSigningVariables = signingVariables.findAll { !env[it]?.trim() }
+def releaseSigningReady = missingSigningVariables.isEmpty()
+// Only "none set" falls back to the debug key (a test build); some but not all set is a mistake.
+def partialReleaseSigning = !releaseSigningReady && missingSigningVariables.size() < signingVariables.size()
+// Optional pin of the release certificate (lower-case hex SHA-256, colons allowed), checked before a release build.
+def expectedCertificate = (env['BACKSTAGE_EXPECT_CERT_SHA256'] ?: '').trim().toLowerCase().replace(':', '')
+if (releaseSigningReady && !new File(releaseKeystorePath).isFile()) {
+    throw new GradleException("Backstage: BACKSTAGE_KEYSTORE=${releaseKeystorePath} does not exist")
+}
+
+// SHA-256 (lower-case hex) of the signing certificate in a keystore; matches PackageManager's Signature bytes.
+def certificateSha256 = { File store, String storePassword, String alias ->
+    def keyStore = KeyStore.getInstance(store, storePassword.toCharArray())
+    def certificate = keyStore.getCertificate(alias)
+    if (certificate == null) throw new GradleException("Backstage: alias '${alias}' not found in ${store}")
+    MessageDigest.getInstance('SHA-256').digest(certificate.encoded).encodeHex().toString()
+}
+
+// The debug key must exist at configuration time so its certificate can be pinned (CAR_COMPANION_CERTIFICATES of debug
+// builds). Create it exactly like AGP would (same alias, passwords and DN) when it is missing.
+def debugSigning = android.signingConfigs.debug
+def debugStore = debugSigning.storeFile
+if (debugStore != null && !debugStore.isFile()) {
+    debugStore.parentFile.mkdirs()
+    def keytool = new File(System.getProperty('java.home'), 'bin/keytool').absolutePath
+    def result = providers.exec {
+        commandLine keytool, '-genkeypair', '-keystore', debugStore.absolutePath,
+                '-storepass', debugSigning.storePassword, '-alias', debugSigning.keyAlias,
+                '-keypass', debugSigning.keyPassword, '-keyalg', 'RSA', '-keysize', '2048',
+                '-validity', '10950', '-dname', 'CN=Android Debug,O=Android,C=US'
+        ignoreExitValue = true
+    }.result.get()
+    if (result.exitValue != 0 && !debugStore.isFile()) {
+        throw new GradleException("Backstage: could not create the debug keystore ${debugStore}")
+    }
+    log("created debug keystore ${debugStore}")
+}
+def debugCertificate = debugStore?.isFile() ?
+        certificateSha256(debugStore, debugSigning.storePassword, debugSigning.keyAlias) : ''
+def releaseCertificate = releaseSigningReady ?
+        certificateSha256(new File(releaseKeystorePath), env['BACKSTAGE_KEYSTORE_PASSWORD'], env['BACKSTAGE_KEY_ALIAS']) :
+        debugCertificate
+
+def configureReleaseSigning = { androidExtension ->
+    if (releaseSigningReady) {
+        def config = androidExtension.signingConfigs.findByName('backstageRelease') ?:
+                androidExtension.signingConfigs.create('backstageRelease')
+        config.storeFile = new File(releaseKeystorePath)
+        config.storePassword = env['BACKSTAGE_KEYSTORE_PASSWORD']
+        config.keyAlias = env['BACKSTAGE_KEY_ALIAS']
+        config.keyPassword = env['BACKSTAGE_KEY_PASSWORD']
+        config.enableV2Signing = true
+        config.enableV3Signing = true
+        androidExtension.buildTypes.release.signingConfig = config
+    } else {
+        androidExtension.buildTypes.release.signingConfig = androidExtension.signingConfigs.debug
+    }
+}
+
+// ---------------------------------------------------------------------------------------------:app setup
+// Our overlay *replaces* the github flavor manifest (upstream has none today). Fail loudly instead of
+// silently dropping upstream's file if a future upstream version adds one.
+if (file('src/github/AndroidManifest.xml').exists()) {
+    throw new GradleException('Backstage: upstream now ships src/github/AndroidManifest.xml; merge its content into ' +
+            'backstage/overlay/AndroidManifest.github.xml (or move the overlay to githubDebug/githubRelease source sets)')
+}
+dependencies {
+    implementation project(':backstage')
+}
+
+android {
+    sourceSets {
+        main {
+            // BackstageDesktopBridge & co. are compiled into:app so they can reach Dextop's internal API.
+            if (glueDir.isDirectory()) java.srcDir(glueDir)
+        }
+        // Upstream regenerates main/res strings on every build, so the label override lives in the flavor.
+        github {
+            if (!skipOmpPayload && ompPayloadReady) assets.srcDir(ompAssetsDir)
+            res.srcDir(new File(overlayDir, 'res'))
+            manifest.srcFile(new File(overlayDir, 'AndroidManifest.github.xml'))
+        }
+    }
+
+    // Archives already compressed by their publishers/assembler must be stored verbatim in the APK.
+    androidResources { noCompress += ['zip', 'gz', 'tgz'] }
+
+    // BuildConfig fields read by patches/0002 (fork identity). They are defined here, not in upstream's build files:
+    // hunks next to upstream's version lines would conflict with every upstream release.
+    defaultConfig {
+        buildConfigField 'String', 'CAR_COMPANION_PACKAGE', "\"${backstageApplicationId}.cardex\""
+        buildConfigField 'String', 'CAR_COMPANION_DRIVING_PACKAGE', "\"${backstageApplicationId}.cardex.driving\""
+        // Build types other than debug/release (Flutter's profile): trust only companions signed like a release.
+        buildConfigField 'String', 'CAR_COMPANION_CERTIFICATES', "\"${releaseCertificate}\""
+        // Device reports of this fork never go to upstream's inbox: the user picks the recipient.
+        buildConfigField 'String', 'DEVICE_REPORT_EMAIL', '""'
+    }
+
+    productFlavors {
+        github {
+            applicationId = backstageApplicationId
+            versionName = backstageVersionName
+            versionCode = backstageVersionCode
+            buildConfigField 'String', 'BACKSTAGE_VERSION', "\"${backstageVersionName}\""
+        }
+    }
+
+    // Build types override flavors: each build type trusts only companions signed like itself.
+    buildTypes {
+        debug {
+            buildConfigField 'String', 'CAR_COMPANION_CERTIFICATES', "\"${debugCertificate}\""
+        }
+        release {
+            buildConfigField 'String', 'CAR_COMPANION_CERTIFICATES', "\"${releaseCertificate}\""
+            proguardFile new File(overlayDir, 'proguard-rules.pro')
+        }
+    }
+}
+configureReleaseSigning(android)
+
+// Direct Gradle builds validate the OMP payload before packaging its assets.
+tasks.matching { it.name ==~ /mergeGithub(Debug|Release|Profile)Assets/ }.configureEach {
+    inputs.file(new File(backstageRoot, 'upstream/omp-termux/UPSTREAM.env'))
+    inputs.file(new File(backstageRoot, 'scripts/lib/omp_payload.py'))
+    inputs.property('backstageSkipOmp', skipOmpPayload)
+    doFirst {
+        def release = name.contains('Release')
+        if (skipOmpPayload && !name.contains('Debug')) {
+            throw new GradleException('Backstage: BACKSTAGE_SKIP_OMP / backstage.skipOmp is debug only')
+        }
+        if (skipOmpPayload || !ompPayloadReady) {
+            def message = 'Backstage: OMP payload missing or skipped; run scripts/fetch-omp-payload.sh before building'
+            if (release) throw new GradleException(message)
+            logger.warn(message + ' (building without OMP)')
+        } else {
+            def result = providers.exec {
+                commandLine 'python3', '-I', new File(backstageRoot, 'scripts/lib/omp_payload.py').path,
+                        'verify-dir', '--pins', new File(backstageRoot, 'upstream/omp-termux/UPSTREAM.env').path,
+                        '--directory', new File(ompAssetsDir, 'omp').path
+                ignoreExitValue = true
+            }.result.get()
+            if (result.exitValue != 0) {
+                throw new GradleException('Backstage: OMP payload is stale or corrupt; run scripts/fetch-omp-payload.sh')
+            }
+        }
+    }
+}
+
+// Build only the upstream GitHub variant.
+androidComponents {
+    beforeVariants(selector().all()) { variantBuilder ->
+        if (!variantBuilder.productFlavors.any { it.second == 'github' }) variantBuilder.enable = false
+    }
+}
+
+// ---------------------------------------------------------------------------- Car Companion (:cardex*)
+// Not built or shipped ("not needed for Backstage"): upstream's:cardex/:cardexdriving modules stay in its
+// settings but nothing here builds, re-identifies or signs them. The app keeps trusting only its own companion identity
+// (CAR_COMPANION_* above, patches/0002), and backstage/overlay/AndroidManifest.github.xml removes the relay the
+// companion used.
+
+// ------------------------------------------------------------------------------------------ diagnostics
+log("${backstageApplicationId} ${backstageVersionName} (versionCode ${backstageVersionCode}), root ${backstageRoot}" +
+        (glueDir.isDirectory() ? '' : ' [no dextop-glue sources yet]'))
+// Only the APKs this script signs count: a debug build also packages upstream's:linuxshortcut template in release mode.
+def signedProjects = [project.path]
+gradle.taskGraph.whenReady { graph ->
+    if (graph.allTasks.any { it.project.path in signedProjects && it.name ==~ /(package|bundle|assemble)\w*Release/ }) {
+        if (partialReleaseSigning) {
+            throw new GradleException("Backstage: release signing is configured only partly; missing: " +
+                    "${missingSigningVariables.join(', ')}. Set all four BACKSTAGE_* signing variables, or none for a " +
+                    'debug-signed test build.')
+        }
+        def signingCertificate = releaseSigningReady ? releaseCertificate : debugCertificate
+        if (expectedCertificate && signingCertificate != expectedCertificate) {
+            throw new GradleException("Backstage: release builds would be signed with certificate SHA-256 " +
+                    "${signingCertificate ?: '(none)'}, but BACKSTAGE_EXPECT_CERT_SHA256 is ${expectedCertificate}. " +
+                    'Existing installs could not update to such an APK.')
+        }
+        if (releaseSigningReady) {
+            log("release builds are signed with ${releaseKeystorePath} (certificate SHA-256 ${releaseCertificate})")
+        } else {
+            logger.warn('Backstage: WARNING: BACKSTAGE_KEYSTORE, BACKSTAGE_KEYSTORE_PASSWORD, BACKSTAGE_KEY_ALIAS and ' +
+                    'BACKSTAGE_KEY_PASSWORD are not all set - release builds are signed with the DEBUG key ' +
+                    "(certificate SHA-256 ${debugCertificate}). Do not distribute such APKs.")
+        }
+    }
+}

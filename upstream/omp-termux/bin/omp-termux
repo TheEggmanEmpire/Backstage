@@ -1,0 +1,1081 @@
+#!/usr/bin/env bash
+# omp-termux — install and update the @oh-my-pi/pi-natives N-API addon for omp on Android aarch64 / Termux.
+#
+#   omp-termux install [version|file]   bring this device to that version: no argument = the version it runs,
+#                                       "latest" = the newest build published here, or a local .node
+#   omp-termux status                   show the installed pi-natives package(s)
+#   omp-termux verify                   check that the addon loads and omp starts
+#   omp-termux doctor                   check the environment of this device
+#   omp-termux update-self              replace this tool with the newest from this repository
+#   omp-termux uninstall-self           remove the tool and its self-update cache from this device
+#
+# Environment: OMP_TERMUX_REPO, OMP_TERMUX_RELEASE_BASE and OMP_TERMUX_RAW_BASE (point the tool at another
+# repository), OMP_TERMUX_CACHE_HOME (the scratch root; each install/verify run works in a run.<pid> directory
+# under it), OMP_TERMUX_VERSION (the version an argument-less install targets), OMP_TERMUX_NO_UPDATE_CHECK (any
+# value = never check for a newer omp-termux; status then reads its `newest` line from the cache),
+# OMP_TERMUX_UPDATE_TTL (seconds between checks, default 86400), OMP_TERMUX_VERBOSE (any value = per-copy detail).
+# Design notes: docs/dev/tool.md.
+set -Eeuo pipefail
+# An unexpected non-zero (usually a pipeline element under `pipefail`) would abort with no message.
+trap 'printf "%somp-termux: error:%s unexpected failure at %s:%s: %s\n" "${C_ERR:-}" "${C_OFF:-}" "${BASH_SOURCE[0]##*/}" "$LINENO" "$BASH_COMMAND" >&2' ERR
+
+# --- constants -------------------------------------------------------------------------------------
+TERMUX_PREFIX="${PREFIX:-}"             # Termux exports PREFIX; capture it before this script reuses the name
+PREFIX="$HOME/.local/opt/omp-termux"    # this tool's own copy, not XDG_DATA_HOME: every install it made is here
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ADDON="pi_natives.android-arm64.node"
+VERIFY_LOG="verify.log"
+PROBE_JS="probe.mjs"
+UPSTREAM_REPO="can1357/oh-my-pi"        # upstream project: its newest release has no build here until we build one
+REPO="${OMP_TERMUX_REPO:-hmeqo/omp-termux}"
+TOOL_VERSION=0.6.0                      # a label only: every comparison reads the content hash
+PROG="omp-termux"                        # names this script in hints; dev/omp-termux-dev overrides it
+PARENT_PATH="$PATH"                      # inherited before use_root prepends to ours: the PATH hints judge the user's shell
+SELF_URL="${OMP_TERMUX_RAW_BASE:-https://raw.githubusercontent.com/$REPO/main}/bin/omp-termux"
+SELF_CACHE="$PREFIX/cache/self-update"  # under $PREFIX, so uninstall-self removes it too
+SELF_TTL="${OMP_TERMUX_UPDATE_TTL:-86400}"
+BUN_URL="https://github.com/oven-sh/bun/releases/latest/download/bun-linux-aarch64-android.zip"
+case "$SELF_TTL" in '' | *[!0-9]*) SELF_TTL=86400 ;; esac
+
+# --- state: written once by resolve_env, read-only afterwards; download_bun also sets BUN_BIN for the
+# root it just provisioned, since resolve_env would otherwise keep another root's stale bun -----------
+BIN_HOME=""      # where omp-termux is linked, on PATH
+CACHE_HOME=""    # scratch root: one run.<pid> directory per install/verify run
+SCRATCH=""       # this run's directory under CACHE_HOME; removed on exit
+TMP_HOME=""      # a writable temp dir for this process
+BUN_DEFAULT=""   # bun's own default root: where a bun this tool installs lands
+BUN_ROOTS=""     # the install roots that exist, one per line
+BUN_HOME=""      # the root in use
+BUN_BIN=""       # "" when bun is missing
+OMP_BIN=""       # "" when there is none
+
+# --- output ----------------------------------------------------------------------------------------
+if [ -t 2 ]; then
+	C_MSG=$'\033[1;36m'; C_WARN=$'\033[1;33m'; C_ERR=$'\033[1;31m'; C_OFF=$'\033[0m'
+else
+	C_MSG=""; C_WARN=""; C_ERR=""; C_OFF=""
+fi
+
+msg()    { printf '%s==>%s %s\n' "$C_MSG" "$C_OFF" "$*" >&2; }
+result() { printf 'omp-termux: %s\n' "$*"; }
+warn()   { printf '%swarning:%s %s\n' "$C_WARN" "$C_OFF" "$*" >&2; }
+print_error() {
+	printf '%s%s: error:%s %s\n' "$C_ERR" "${PROG:-omp-termux}" "$C_OFF" "$1" >&2
+	if [ -n "${2:-}" ]; then printf '  hint: %s\n' "$2" >&2; fi
+}
+err()    { print_error "$@"; return 1; }
+die()    { print_error "$@"; exit 1; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() { sed -n '4,10p' "$SELF" | sed 's/^# \{0,1\}//'; }
+
+reject_option() { # $1 = the argument to check; option-looking arguments are always a mistake here
+	case "${1:-}" in
+		-*) die "unexpected option: $1 (run '$PROG help')" ;;
+	esac
+}
+
+require_file_arg() { # $1 = an argument that names a file; dies when it does not
+	[ -f "$1" ] || die "not a file: $1"
+}
+
+json_version() {
+	[ -f "${1:-}" ] || return 0
+	sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | head -n1
+}
+
+file_sha() { [ -f "${1:-}" ] || return 0; sha256sum "$1" 2>/dev/null | cut -d' ' -f1 || true; }
+
+tmp_dir() { # a directory this process may write scratch files to; "" when there is none
+	# $TMPDIR is often unset (install.sh, CI, cron); /tmp is the last resort because Android has none.
+	local d
+	for d in "${TMPDIR:-}" "$HOME" /tmp; do
+		if [ -n "$d" ] && [ -d "$d" ] && [ -w "$d" ]; then
+			printf '%s\n' "$d"
+			return 0
+		fi
+	done
+	return 0
+}
+
+version_max() { printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1; }
+
+version_min() { printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1; }
+
+version_ge() { [ "$1" = "$(version_max "$1" "$2")" ]; }
+
+version_gt() { [ "$1" != "$2" ] && version_ge "$1" "$2"; }
+
+version_lt() { [ "$1" != "$2" ] && [ "$1" = "$(version_min "$1" "$2")" ]; }
+
+same_path() { # $1, $2 = paths: true when they reach the same directory (a symlinked spelling included)
+	[ "$(readlink -f "${1:-/nonexistent}" 2>/dev/null)" = "$(readlink -f "${2:-/nonexistent}" 2>/dev/null)" ]
+}
+
+# --- environment: bun, omp and this tool's own directories -----------------------------------------
+absolute_dir() { # $1 = a path from the environment; prints it when it is absolute (usable), nothing otherwise
+	# bun fails with EACCES on a relative root; the XDG spec wants absolute paths too.
+	case "${1:-}" in
+		/*) printf '%s\n' "$1" ;;
+	esac
+}
+
+bun_default_root() { # bun's own rule: BUN_INSTALL wins, XDG_CACHE_HOME moves the default, else ~/.bun
+	local r
+	r="$(absolute_dir "${BUN_INSTALL:-}")"
+	if [ -n "$r" ]; then
+		printf '%s\n' "$r"
+		return 0
+	fi
+	r="$(absolute_dir "${XDG_CACHE_HOME:-}")"
+	if [ -n "$r" ]; then
+		printf '%s\n' "$r/.bun"
+		return 0
+	fi
+	printf '%s\n' "$HOME/.bun"
+}
+
+existing_bun_roots() { # the rule: every install root that exists, bun's own rule order first
+	local r seen=""
+	# $HOME/.cache/.bun is bun's XDG-era root, reachable only through XDG_CACHE_HOME, so it comes last.
+	for r in "${BUN_INSTALL:-}" "${XDG_CACHE_HOME:+$XDG_CACHE_HOME/.bun}" "$HOME/.bun" "$HOME/.cache/.bun"; do
+		case "$r" in ""|/*) ;; *) continue ;; esac   # a relative root is not one bun can use (see absolute_dir)
+		case " $seen " in *" $r "*) continue ;; esac
+		[ -d "$r/install" ] || continue
+		seen="$seen $r"
+		printf '%s\n' "$r"
+	done
+}
+
+bun_roots() { # the install roots this run resolved, one per line (resolve_env re-reads them)
+	if [ -n "$BUN_ROOTS" ]; then
+		printf '%s\n' "$BUN_ROOTS"
+	fi
+}
+
+bun_root_in_use() { # the root in use: one that already carries omp, else any existing, else the default
+	local r
+	while IFS= read -r r; do
+		[ -f "$r/install/global/node_modules/@oh-my-pi/pi-coding-agent/package.json" ] &&
+			{ printf '%s\n' "$r"; return 0; }
+	done < <(bun_roots)
+	while IFS= read -r r; do printf '%s\n' "$r"; return 0; done < <(bun_roots)
+	printf '%s\n' "$BUN_DEFAULT"
+}
+
+bin_home_dir() { # where this tool links itself: Termux' $PREFIX/bin is already on PATH, XDG_BIN_HOME is the rest
+	local b
+	if [ -n "$TERMUX_PREFIX" ]; then
+		printf '%s\n' "$TERMUX_PREFIX/bin"
+		return 0
+	fi
+	b="$(absolute_dir "${XDG_BIN_HOME:-}")"
+	[ -n "$b" ] || b="$HOME/.local/bin"
+	printf '%s\n' "$b"
+}
+
+cache_home_dir() { # scratch: $OMP_TERMUX_CACHE_HOME, else the XDG cache dir, else ~/.cache
+	local d
+	d="$(absolute_dir "${OMP_TERMUX_CACHE_HOME:-}")"
+	case "$d" in
+		/ | "$HOME" | "$HOME"/) warn "ignoring OMP_TERMUX_CACHE_HOME=$d: not a scratch directory"; d="" ;;
+	esac
+	if [ -z "$d" ]; then
+		d="$(absolute_dir "${XDG_CACHE_HOME:-}")"
+		[ -n "$d" ] || d="$HOME/.cache"
+		d="$d/omp-termux"
+	fi
+	printf '%s\n' "$d"
+}
+
+bun_binary_path() { # "" when bun is not installed
+	local b r
+	b="$(command -v bun 2>/dev/null || true)"
+	# a PATH hit can be a stale hash entry or a noexec mount: fall through to the install roots then
+	[ -n "$b" ] && [ -x "$b" ] || b=""
+	if [ -z "$b" ]; then
+		r="$BUN_DEFAULT"
+		[ -x "$r/bin/bun" ] && b="$r/bin/bun"
+		if [ -z "$b" ]; then
+			while IFS= read -r r; do
+				[ -x "$r/bin/bun" ] && { b="$r/bin/bun"; break; }
+			done < <(bun_roots)
+		fi
+	fi
+	if [ -n "$b" ] && [ -x "$b" ]; then
+		printf '%s\n' "$b"
+	fi
+}
+
+omp_binary_path() { # the `omp` the user runs: PATH first, then the roots (a non-interactive shell has neither)
+	local b r
+	b="$(command -v omp 2>/dev/null || true)"
+	[ -n "$b" ] && [ -x "$b" ] && { printf '%s\n' "$b"; return 0; }
+	while IFS= read -r r; do
+		[ -x "$r/bin/omp" ] && { printf '%s\n' "$r/bin/omp"; return 0; }
+	done < <(bun_roots)
+	return 0
+}
+
+resolve_env() { # the one place the environment is read; call it again after a step that changes it
+	BIN_HOME="$(bin_home_dir)"
+	CACHE_HOME="$(cache_home_dir)"
+	TMP_HOME="$(tmp_dir)"
+	BUN_DEFAULT="$(bun_default_root)"
+	BUN_ROOTS="$(existing_bun_roots)"
+	BUN_HOME="$(bun_root_in_use)"     # reads $BUN_ROOTS and $BUN_DEFAULT, so those are set first
+	BUN_BIN="$(bun_binary_path)"
+	OMP_BIN="$(omp_binary_path)"
+}
+# resolve_env runs from main, not here: sourcing this file (dev/omp-termux-dev) must not probe the machine.
+
+use_root() {
+	BUN_INSTALL="$BUN_HOME"; export BUN_INSTALL
+	case ":$PATH:" in
+		*":$BUN_HOME/bin:"*) ;;
+		*) PATH="$BUN_HOME/bin:$PATH"; export PATH ;;
+	esac
+}
+
+# --- scratch: one directory per run -----------------------------------------------------------------
+scratch_open() { # this run's own directory under $CACHE_HOME; the EXIT trap removes it
+	local d pid
+	mkdir -p "$CACHE_HOME" || die "cannot create the scratch root: $CACHE_HOME"
+	# A killed run never reaches the trap; its directory is reclaimed here, while a live one is left alone.
+	for d in "$CACHE_HOME"/run.*; do
+		[ -d "$d" ] || continue
+		pid="${d##*/run.}"
+		case "$pid" in '' | 0 | *[!0-9]*) rm -rf "$d" ;; *) kill -0 "$pid" 2>/dev/null || rm -rf "$d" ;; esac
+	done
+	SCRATCH="$CACHE_HOME/run.$$"
+	mkdir -p "$SCRATCH" || die "cannot create the scratch directory: $SCRATCH"
+	trap 'scratch_reap' EXIT
+}
+
+scratch_reap() { # remove this run's files, then $CACHE_HOME when nothing else is in it
+	[ -n "${SCRATCH:-}" ] || return 0
+	rm -rf "$SCRATCH"
+	rmdir "$CACHE_HOME" 2>/dev/null || true
+}
+
+# --- fs and http ------------------------------------------------------------------------------------
+stage_into() { # $1 = file to place, $2 = final path; copies beside it and renames over it
+	local part
+	part="${2}.part.$$"
+	cp -f "$1" "$part" || { rm -f "$part"; return 1; }
+	mv -f "$part" "$2" || { rm -f "$part"; return 1; }
+}
+
+http() { # $1 = URL, $2 = output, $3 = max seconds; prints "<status> <effective URL>", returns curl's status
+	local line rc=0
+	line="$(curl -fsSL --retry 3 --connect-timeout 15 --max-time "${3:-300}" -o "$2" \
+		-w '%{http_code} %{url_effective}' "$1" 2>/dev/null)" || rc=$?
+	printf '%s\n' "${line:-000 }"
+	return "$rc"
+}
+
+# --- what is installed ------------------------------------------------------------------------------
+search_roots() { # every directory that may hold an installed @oh-my-pi/pi-natives
+	local r
+	while IFS= read -r r; do
+		printf '%s\n' "$r/install/cache" "$r/install/global/node_modules"
+	done < <(bun_roots)
+}
+
+natives_dirs() {
+	local root d real seen=$'\n'
+	while IFS= read -r root; do
+		[ -d "$root" ] || continue
+		while IFS= read -r d; do
+			[ -f "$d/package.json" ] || continue
+			real="$(readlink -f "$d" 2>/dev/null)" || real="$d"
+			[ -n "$real" ] || real="$d"
+			case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
+			seen="$seen$real"$'\n'
+			printf '%s\n' "$d"
+		done < <(find -L "$root" -maxdepth 3 -type d -path '*@oh-my-pi/pi-natives*' 2>/dev/null)
+	done < <(search_roots) | sort -u
+}
+
+newest_natives_dir() { # $1 = a root prefix; prints the newest matching dir
+	local d v best="" dir=""
+	while IFS= read -r d; do
+		case "$d" in "$1"/*) ;; *) continue ;; esac
+		v="$(json_version "$d/package.json")"
+		[ -n "$v" ] || continue
+		if [ -z "$best" ] || version_ge "$v" "$best"; then
+			best="$v"
+			dir="$d"
+		fi
+	done < <(natives_dirs)
+	printf '%s\n' "$dir"
+}
+
+installed_state() { # prints version|addon|dir|cli: the package the device loads and the omp it runs
+	local root scope dir version addon cli
+	root="$BUN_HOME"
+	scope="$root/install/global/node_modules/@oh-my-pi"
+	dir="$scope/pi-natives"
+	# the running omp resolves the root in use's global tree; a pi-natives in another root is a leftover
+	[ -f "$dir/package.json" ] || dir="$(newest_natives_dir "$root")"
+	version=""
+	addon=""
+	if [ -n "$dir" ] && [ -f "$dir/package.json" ]; then
+		version="$(json_version "$dir/package.json")"
+		addon="$dir/native/$ADDON"
+	fi
+	cli=""
+	[ -f "$scope/pi-coding-agent/package.json" ] && cli="$(json_version "$scope/pi-coding-agent/package.json")"
+	printf '%s|%s|%s|%s\n' "$version" "$addon" "$dir" "$cli"
+}
+
+# The loader skips its release check when the native dir has no /node_modules/ segment.
+is_workspace_load() {
+	case "$1" in
+		*/node_modules/*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+# A stamped addon reports PI_NATIVES_VERSION_STAMP:<version>; older releases export __piNativesV<version>.
+artifact_version() { # $1 = .node file -> the release it reports ("" when it carries no identity)
+	local stamp
+	stamp="$(grep -ao 'PI_NATIVES_VERSION_STAMP:[-0-9A-Za-z._]*' "${1:-}" 2>/dev/null | head -n1)" || true
+	if [ -n "$stamp" ]; then
+		printf '%s\n' "${stamp#PI_NATIVES_VERSION_STAMP:}"
+		return 0
+	fi
+	grep -ao '__piNativesV[0-9A-Za-z_]*' "${1:-}" 2>/dev/null | head -n1 | sed 's/^__piNativesV//; s/_/./g' || true
+}
+
+# --- release lookups and downloads ------------------------------------------------------------------
+latest_release_version() { # the newest build published here; "" when the lookup fails
+	local line url
+	line="$(http "https://github.com/$REPO/releases/latest" /dev/null 20)" || true
+	url="${line#* }"
+	case "$url" in
+		*"/releases/tag/omp-"*) printf '%s\n' "${url##*/releases/tag/omp-}" ;;
+	esac
+}
+
+latest_version() { # the newest upstream omp release; "" when the lookup fails
+	local line url
+	line="$(http "https://github.com/$UPSTREAM_REPO/releases/latest" /dev/null 20)" || true
+	url="${line#* }"
+	case "$url" in
+		*"/releases/tag/v"*) printf '%s\n' "${url##*/releases/tag/v}" ;;
+	esac
+}
+
+fetch_release() { # $1 = version; prints the downloaded addon path, dies when it cannot be fetched
+	local version="$1" base url line code reported out
+	base="${OMP_TERMUX_RELEASE_BASE:-https://github.com/$REPO/releases/download/omp-$version}"
+	url="$base/$ADDON"
+	[ -n "${SCRATCH:-}" ] || die "no scratch directory to download into"
+	msg "fetching pi-natives $version for android-arm64"
+	out="$SCRATCH/$ADDON"
+	local rc=0
+	line="$(http "$url" "$out" 1800)" || rc=$?
+	code="${line%% *}"
+	case "$code" in
+		2??) ;;
+		000) [ "$rc" -eq 0 ] && [ -s "$out" ] || { err "could not download $url; nothing was changed"; return 1; } ;;
+		404) err "no release for $version at $url; nothing was changed"; return 1 ;;
+		4??) err "the release server refused $version (HTTP $code); nothing was changed"; return 1 ;;
+		5??) err "the release server failed (HTTP $code) for $version; nothing was changed - run the install again"; return 1 ;;
+		*) err "could not download $url; nothing was changed"; return 1 ;;
+	esac
+	reported="$(artifact_version "$out")"
+	if [ "$reported" != "$version" ]; then
+		err "the downloaded addon is $([ -n "$reported" ] && echo "for $reported, not $version" || echo "not a pi-natives build"); nothing was changed"
+		return 1
+	fi
+	printf '%s\n' "$out"
+}
+
+# --- bun --------------------------------------------------------------------------------------------
+download_bun() { # $1 = root to install into (default: $BUN_DEFAULT)
+	local root="${1:-$BUN_DEFAULT}" tmp line code
+	tmp="${TMP_HOME:-$HOME}/omp-bun.$$"
+	mkdir -p "$tmp" "$root/bin" || return 1
+	local rc=0
+	line="$(http "$BUN_URL" "$tmp/bun.zip" 1800)" || rc=$?
+	code="${line%% *}"
+	case "$code" in
+		2??) ;;
+		000) [ "$rc" -eq 0 ] && [ -s "$tmp/bun.zip" ] || { rm -rf "$tmp"; return 1; } ;;
+		*) rm -rf "$tmp"; return 1 ;;
+	esac
+	unzip -oq "$tmp/bun.zip" -d "$tmp" || { rm -rf "$tmp"; return 1; }
+	cp -f "$tmp"/bun-linux-aarch64-android/bun "$root/bin/bun" || { rm -rf "$tmp"; return 1; }
+	chmod +x "$root/bin/bun"
+	rm -rf "$tmp"
+	resolve_env
+	use_root
+	# The root just provisioned: resolve_env would pick another root's stale bun instead.
+	BUN_BIN="$root/bin/bun"
+	[ -x "$BUN_BIN" ]
+}
+
+device_ensure_bun() { # install bun on this device when it is missing
+	[ -n "$BUN_BIN" ] && return 0
+	msg "installing bun"
+	if have pkg && pkg install -y bun >/dev/null 2>&1; then
+		resolve_env      # pkg just provided a bun: read it before deciding there is none
+		if [ -n "$BUN_BIN" ]; then
+			use_root
+			return 0
+		fi
+	fi
+	download_bun
+}
+
+upgrade_bun() { # bring the bun in use to the newest build; its own upgrader first, then the Android zip
+	local out=""
+	if [ -n "$BUN_BIN" ] && out="$("$BUN_BIN" upgrade 2>&1)"; then
+		resolve_env
+		use_root
+		return 0
+	fi
+	[ -n "$out" ] && warn "bun upgrade failed: $(printf '%s\n' "$out" | tail -n1)"
+	msg "fetching the latest bun Android build"
+	download_bun "$BUN_HOME"
+}
+
+cli_bun_floor() { # the "engines.bun" floor of the omp this device runs, if declared
+	local real pkg req
+	[ -n "$OMP_BIN" ] || return 0
+	real="$(readlink -f "$OMP_BIN" 2>/dev/null)" || return 0
+	pkg="$(dirname "$(dirname "$real")")/package.json"
+	[ -f "$pkg" ] || return 0
+	req="$(sed -n '/"engines"/,/}/s/.*"bun": *"[^0-9]*\([0-9][0-9.]*\).*/\1/p' "$pkg" | sed -n 1p)"
+	[ -n "$req" ] || return 0
+	printf '%s\n' "$req"
+}
+
+ensure_bun_for_omp() { # 0 when the bun in use satisfies the omp on this device; upgrades it otherwise
+	local need cur
+	need="$(cli_bun_floor)"
+	[ -n "$need" ] || return 0
+	[ -n "$BUN_BIN" ] || device_ensure_bun || return 1
+	cur="$("$BUN_BIN" --version 2>/dev/null || true)"
+	[ -n "$cur" ] || { warn "cannot read the bun version"; return 1; }
+	version_lt "$cur" "$need" || return 0
+	msg "omp requires bun >= $need (found $cur); upgrading bun"
+	upgrade_bun || { warn "bun upgrade failed; run 'bun upgrade' on this device"; return 1; }
+	cur="$("$BUN_BIN" --version 2>/dev/null || true)"
+	if [ -n "$cur" ] && ! version_lt "$cur" "$need"; then
+		return 0
+	fi
+	warn "bun is ${cur:-unknown}, but omp needs >= $need"
+	return 1
+}
+
+# --- omp tree ---------------------------------------------------------------------------------------
+stray_scope_deps() { # the @oh-my-pi entries the global manifest lists besides the CLI, space separated
+	# bun resolves a leftover entry to the newest version its range allows, over the CLI's exact pins.
+	local manifest="$BUN_HOME/install/global/package.json" strays="" name
+	[ -f "$manifest" ] || return 0
+	while IFS= read -r name; do
+		strays="${strays:+$strays }$name"
+	done < <(tr ',' '\n' <"$manifest" |
+		sed -n 's/^[[:space:]]*"\(@oh-my-pi\/[^"]*\)"[[:space:]]*:.*/\1/p' |
+		grep -v '^@oh-my-pi/pi-coding-agent$' || true)
+	printf '%s\n' "$strays"
+}
+
+drop_stray_scope_deps() { # removes the scope entries bun kept besides the CLI, where the verb is about to act
+	local strays name
+	[ -n "$BUN_BIN" ] || return 0
+	strays="$(stray_scope_deps)"
+	[ -n "$strays" ] || return 0
+	use_root
+	msg "dropping the stale global entries: $strays"
+	for name in $strays; do
+		# One per call: a batched remove fails wholesale when any name is absent, leaving the rest in place.
+		"$BUN_BIN" remove -g "$name" || warn "removing $name from the global manifest failed"
+	done
+}
+
+install_addon() { # $1 = path to a .node
+	local addon="$1" target_version n=0 seen="" d v
+	[ -f "$addon" ] || die "no artifact to install: $addon"
+	target_version="$(artifact_version "$addon")"
+	msg "installing the addon"
+	while IFS= read -r d; do
+		v="$(json_version "$d/package.json")"
+		if [ -n "$target_version" ] && [ "$v" != "$target_version" ]; then
+			# The loader compares that release against the package, so another version must not receive it.
+			seen="${seen:+$seen, }${v:-unknown}"
+			continue
+		fi
+		mkdir -p "$d/native"
+		stage_into "$addon" "$d/native/$ADDON" || die "cannot place $ADDON under $d/native"
+		if [ -n "${OMP_TERMUX_VERBOSE:-}" ]; then
+			msg "installed -> $d/native/$ADDON$(is_workspace_load "$d" && echo ' [workspace-load: release check skipped]' || echo ' [node_modules: release must match]')"
+		fi
+		n=$((n + 1))
+	done < <(natives_dirs)
+	[ "$n" -gt 0 ] || die "no @oh-my-pi/pi-natives for ${target_version:-the artifact} on this device${seen:+ (found: $seen)}; 'omp-termux install latest' provisions omp here"
+}
+
+link_global_tree() { # bun's cache layout has no node_modules for a lazily imported package; link the global
+	# tree in. `ln -sfn` into a directory would link inside it, so a real directory is left alone.
+	local root cache global entry name
+	while IFS= read -r root; do
+		cache="$root/install/cache"
+		global="$root/install/global/node_modules"
+		[ -d "$cache" ] && [ -d "$global" ] || continue
+		mkdir -p "$cache/node_modules"
+		for entry in "$global"/*; do
+			[ -e "$entry" ] || continue
+			name="$(basename "$entry")"
+			if [ -L "$cache/node_modules/$name" ]; then
+				ln -sfn "$entry" "$cache/node_modules/$name"
+			elif [ -d "$cache/node_modules/$name" ]; then
+				# `ln -sfn` into an existing directory creates a link *inside* it; leave the directory alone.
+				warn "not linking $name: $cache/node_modules/$name is a directory, not a link"
+			elif [ ! -e "$cache/node_modules/$name" ]; then
+				ln -s "$entry" "$cache/node_modules/$name"
+			fi
+		done
+	done < <(bun_roots)
+}
+
+has_other_link_ref() { # $1 = candidate dir, $2 = bun's own nested sibling link (ignored)
+	local want ignore root l
+	want="$(readlink -f "$1" 2>/dev/null)"
+	[ -n "$want" ] || return 1
+	ignore="$(readlink -f "${2:-/nonexistent}" 2>/dev/null)"
+	while IFS= read -r root; do
+		while IFS= read -r l; do
+			[ "$l" = "${2:-}" ] && continue
+			[ -n "$ignore" ] && [ "$l" = "$ignore" ] && continue
+			[ "$(readlink -f "$l" 2>/dev/null)" = "$want" ] && return 0
+		done < <(find "$root/install" -maxdepth 6 -type l 2>/dev/null)
+	done < <(bun_roots)
+	return 1
+}
+
+prune_superseded() { # $1 = the version now installed; drops older pi-natives copies from bun's cache
+	# `find` without -L never descends the link that reaches the copy in use.
+	local keep="${1:-}" root cache d v sz base stem nested
+	[ -n "$keep" ] || return 0
+	while IFS= read -r root; do
+		cache="$root/install/cache"
+		[ -d "$cache" ] || continue
+		while IFS= read -r d; do
+			v="$(json_version "$d/package.json")"
+			[ -n "$v" ] && version_lt "$v" "$keep" || continue
+			base="$(basename "$d")"
+			stem="${base%@@@1}"
+			nested="$(dirname "$d")/${stem%@*}/${stem#*@}@@@1"
+			if has_other_link_ref "$d" "$nested"; then
+				warn "keeping the $v copy: a link still points at it"
+				continue
+			fi
+			sz="$(du -sh "$d" 2>/dev/null | cut -f1)"
+			[ -L "$nested" ] && rm -f "$nested"
+			rm -rf "$d" && msg "removed the superseded $v copy${sz:+ ($sz)}"
+		done < <(find "$cache" -maxdepth 3 -type d -path '*@oh-my-pi/pi-natives*' 2>/dev/null)
+	done < <(bun_roots)
+	return 0
+}
+
+ensure_omp() { # $1 = version; bun and the CLI at that version, the addon is the caller's business
+	local want="$1" rec current addon dir cli pin
+	device_ensure_bun || die "cannot install bun; install it by hand: pkg install bun"
+	drop_stray_scope_deps
+	rec="$(installed_state)"
+	IFS='|' read -r current addon dir cli <<<"$rec"
+	if [ "$cli" != "$want" ] || [ "$current" != "$want" ] || [ -z "$OMP_BIN" ]; then
+		use_root
+		[ -n "$BUN_BIN" ] || die "bun not found; install it first: pkg install bun"
+		msg "installing omp $want (currently ${cli:-none})"
+		pin=""
+		[ "$current" != "$want" ] && pin=" @oh-my-pi/pi-natives@$want"
+		"$BUN_BIN" install -g "@oh-my-pi/pi-coding-agent@$want"$pin || die "installing omp $want failed"
+		if [ -n "$pin" ]; then
+			"$BUN_BIN" remove -g "@oh-my-pi/pi-natives" || warn "the natives pin could not be taken back out"
+		fi
+		resolve_env      # bun's global tree changed: read the roots again before touching the addon
+	fi
+	ensure_bun_for_omp || die "bun is older than omp $want requires; run 'bun upgrade' on this device"
+}
+
+# --- verification -----------------------------------------------------------------------------------
+check_addons() { # $1 = 1 to print the rows (the verify verb); quiet otherwise, dies when the loaded copy fails
+	local full="${1:-0}" rec version addon dir cli d v line rt n miss lrc rc=0 probe="$SCRATCH/$PROBE_JS" errf="$SCRATCH/$PROBE_JS.err" left hidden
+	[ -n "$(natives_dirs)" ] || die "no @oh-my-pi/pi-natives on this machine; nothing to verify"
+	[ -n "${SCRATCH:-}" ] || die "no scratch directory for the probe"
+	[ -n "$BUN_BIN" ] || die "bun not found (looked for 'bun' on PATH and under $BUN_DEFAULT); cannot load-test"
+	rec="$(installed_state)"
+	IFS='|' read -r version addon dir cli <<<"$rec"
+	cat >"$probe" <<'EOF'
+const target = process.argv[2]
+const mod = await import(target)
+const required = ["countTokens", "visibleWidth", "grep", "Shell", "PtySession", "TtyWriter", "EditSession"]
+const missing = required.filter(n => mod[n] === undefined)
+const absent = ["DesktopSession", "copyToClipboard", "AudioCapture"].filter(n => mod[n] === undefined)
+const rt = `${process.platform}-${process.arch}`
+console.log(`${rt}|${Object.keys(mod).length}|${missing.join(",")}`)
+if (absent.length && process.env.OMP_TERMUX_VERBOSE) console.error(`platform-trimmed (expected on Android): ${absent.join(", ")}`)
+if (missing.length) process.exit(1)
+EOF
+	if [ -n "$dir" ]; then
+		line="$("$BUN_BIN" "$probe" "$dir/native/index.js" 2>"$errf")" || rc=1
+		line="${line%%$'\n'*}"
+		IFS='|' read -r rt n miss <<<"$line"
+		if [ "$rc" -ne 0 ]; then
+			if [ "$full" = 1 ]; then
+				printf '%-6s %-8s %-14s %-12s %s\n' "addon" "$version" "$rt" "$n exports" "failed${miss:+: $miss}"
+				warn "the addon the device loads does not load: $dir"
+				sed 's/^/  /' "$errf" >&2
+			else
+				sed 's/^/  /' "$errf" >&2
+				die "the addon at $dir does not load" "run 'omp-termux verify' for the loader output"
+			fi
+		elif [ "$full" = 1 ]; then
+			printf '%-6s %-8s %-14s %-12s %s\n' "addon" "$version" "$rt" "$n exports" "ok (loaded)"
+		fi
+	fi
+	[ "$full" = 1 ] || { rm -f "$probe"; return "$rc"; }
+	left=0
+	hidden=0
+	while IFS= read -r d; do
+		[ "$d" = "$dir" ] && continue
+		same_path "$d" "$dir" && continue
+		left=$((left + 1))
+		v="$(json_version "$d/package.json")"
+		lrc=0
+		line="$("$BUN_BIN" "$probe" "$d/native/index.js" 2>"$errf")" || lrc=1
+		line="${line%%$'\n'*}"
+		IFS='|' read -r rt n miss <<<"$line"
+		if [ "$lrc" -ne 0 ]; then
+			warn "a leftover addon at $d does not load"
+			miss="${miss:-unknown}"
+			if [ -n "${OMP_TERMUX_VERBOSE:-}" ]; then
+				printf '%-6s %-8s %-14s %-12s %s\n' "addon" "$v" "$rt" "$n exports" "failed: $miss"
+			else
+				printf '%-6s %-8s %s\n' "addon" "$v" "failed: $miss"
+			fi
+			continue
+		fi
+		if [ "$left" -le 2 ] || [ -n "${OMP_TERMUX_VERBOSE:-}" ]; then
+			if [ -n "${OMP_TERMUX_VERBOSE:-}" ]; then
+				printf '%-6s %-8s %-14s %-12s %s\n' "addon" "$v" "$rt" "$n exports" "ok (leftover)"
+			else
+				printf '%-6s %-8s %s\n' "addon" "$v" "ok (leftover)"
+			fi
+		else
+			hidden=$((hidden + 1))
+		fi
+	done < <(natives_dirs)
+	if [ "$hidden" -gt 0 ]; then
+		printf '%-6s %s\n' "addon" "+$hidden more leftovers (OMP_TERMUX_VERBOSE=1 lists them)"
+	fi
+	rm -f "$probe"
+	return "$rc"
+}
+
+run_verify() { # load the addon through the real loader, then smoke-test the CLI
+	local rc=0 out v
+	check_addons 1 || rc=1
+	if [ -n "$OMP_BIN" ]; then
+		v="$(installed_state | cut -d'|' -f4)"
+		if out="$("$OMP_BIN" --version 2>&1)"; then
+			printf '%-6s %-8s %-14s %s\n' "omp" "${v:-unknown}" "starts" "ok"
+		else
+			printf '%-6s %-8s %-14s %s\n' "omp" "${v:-unknown}" "starts" "failed"
+			warn "omp fails to start: $out"
+			rc=1
+		fi
+		case "$OMP_BIN" in
+			"$BUN_HOME"/bin/omp) ;;
+			*) warn "$OMP_BIN is not the copy in use ($BUN_HOME/bin/omp)" ;;
+		esac
+	else
+		warn "no omp binary found (PATH and $BUN_HOME/bin); cannot smoke-test the CLI"
+		rc=1
+	fi
+	[ "$rc" -eq 0 ] || die "verification failed"
+	result "verify ok"
+}
+
+# --- this tool's own install and update -------------------------------------------------------------
+path_hint() { # $1 = a directory the user has to reach; says so once, in the running shell's syntax
+	case ":$PARENT_PATH:" in
+		*":$1:"*) return 0 ;;
+	esac
+	printf '\n' >&2
+	msg "$1 is not in your PATH yet. Add it, e.g."
+	case "${SHELL:-}" in
+		*/fish) printf '  fish_add_path %s\n' "$1" >&2 ;;
+		*) printf '  export PATH="%s:$PATH"    # add to ~/.bashrc, ~/.zshrc, ...\n' "$1" >&2 ;;
+	esac
+}
+
+path_reminder() { # what a device install leaves behind that this shell cannot reach yet: `omp` and the tool
+	if [ "$BUN_HOME/bin" != "$BIN_HOME" ] && { [ -x "$BUN_HOME/bin/omp" ] || [ -x "$BUN_HOME/bin/bun" ]; }; then
+		path_hint "$BUN_HOME/bin"
+	fi
+	path_hint "$BIN_HOME"
+}
+
+link_self() { # $PREFIX/bin/omp-termux linked into $BIN_HOME; quiet while the link is already right
+	local target="$BIN_HOME/omp-termux" want="$PREFIX/bin/omp-termux"
+	if [ -d "$target" ] && [ ! -L "$target" ]; then
+		# `ln -sfn` into a directory links inside it instead; leave a real directory alone.
+		warn "not linking $target: it is a directory, not a link"
+		return 0
+	fi
+	if [ "$(readlink "$target" 2>/dev/null)" = "$want" ]; then
+		path_reminder   # the link is right, but $BIN_HOME may still be missing from PATH
+		return 0
+	fi
+	mkdir -p "$BIN_HOME"
+	ln -sfn "$want" "$target"
+	msg "linked $target -> $want"
+	path_reminder
+}
+
+tool_label() { printf 'v%s (%s)' "$TOOL_VERSION" "$(file_sha "$SELF" | cut -c1-12)"; }
+
+cmd_install_self() { # keep this tool on PATH: $PREFIX, linked into $BIN_HOME
+	mkdir -p "$PREFIX/bin"
+	if [ "$SELF" != "$PREFIX/bin/omp-termux" ]; then
+		# Staged then renamed: a copy already running from $PREFIX/bin never reads a half-written script.
+		install -m 0755 "$SELF" "$PREFIX/bin/.omp-termux.new.$$" ||
+			die "cannot stage omp-termux in $PREFIX/bin"
+		mv -f "$PREFIX/bin/.omp-termux.new.$$" "$PREFIX/bin/omp-termux" || {
+			rm -f "$PREFIX/bin/.omp-termux.new.$$"
+			die "cannot replace $PREFIX/bin/omp-termux"
+		}
+	fi
+	link_self
+}
+
+cmd_uninstall_self() {
+	msg "removing $BIN_HOME/omp-termux and $PREFIX"
+	rm -f "$BIN_HOME/omp-termux"
+	rm -rf "$PREFIX"
+	rmdir "$(dirname "$PREFIX")" 2>/dev/null || true   # leave no empty ~/.local/opt behind
+}
+
+cache_get() { sed -n "s/^$1=//p" "$SELF_CACHE" 2>/dev/null | head -n1 || true; }
+
+cache_put() { # $1 = key, $2 = value; one key per line in $SELF_CACHE, rewritten in place
+	# the cache is an optimization: a failed write must not fail the verb
+	local tmp="$SELF_CACHE.$$"
+	mkdir -p "$(dirname "$SELF_CACHE")"
+	if { grep -v "^$1=" "$SELF_CACHE" 2>/dev/null || true; printf '%s=%s\n' "$1" "$2"; } >"$tmp" && mv -f "$tmp" "$SELF_CACHE"; then
+		return 0
+	fi
+	rm -f "$tmp"
+	return 0
+}
+
+record_release() { # $1 = the newest build published here ("" when unknown), $2 = timestamp (default: now)
+	cache_put release_checked_at "${2:-$(date +%s)}"
+	if [ -n "$1" ]; then
+		cache_put release "$1"
+	fi
+}
+
+refresh_release_cache() { # the `newest` fact: its own timestamp, the shared $SELF_TTL
+	local now at vrel
+	now="$(date +%s)"
+	at="$(cache_get release_checked_at)"
+	case "$at" in '' | *[!0-9]*) at="" ;; esac
+	if [ -n "$at" ] && [ "$((now - at))" -lt "$SELF_TTL" ]; then
+		return 0
+	fi
+	vrel="$(latest_release_version)"
+	record_release "$vrel" "$now"
+	return 0
+}
+
+update_checks_on() { # 0 when this copy should reach the network: the installed one, and no opt-out
+	[ -z "${OMP_TERMUX_NO_UPDATE_CHECK:-}" ] && [ "$SELF" = "$PREFIX/bin/omp-termux" ]
+}
+
+check_self_update() { # one line on stderr when main holds a different copy; never fails the verb
+	update_checks_on || return 0
+	local now at body line code remote cur vremote
+	now="$(date +%s)"
+	[ -n "${TMP_HOME:-}" ] || return 0
+	cur="$(file_sha "$SELF")"
+	# The cached remote hash is only comparable to the copy that fetched it.
+	at="$(cache_get checked_at)"
+	case "$at" in '' | *[!0-9]*) at="" ;; esac
+	[ "$(cache_get self)" = "$cur" ] || at=""
+	if [ -z "$at" ] || [ "$((now - at))" -ge "$SELF_TTL" ]; then
+		body="$TMP_HOME/omp-termux.new.$$"
+		local rc=0
+		line="$(http "$SELF_URL" "$body" 20)" || rc=$?
+		code="${line%% *}"
+		cache_put checked_at "$now"
+		cache_put self "$cur"
+		if { [ "$code" = 200 ] || { [ "$code" = 000 ] && [ "$rc" -eq 0 ]; }; } && [ -s "$body" ]; then
+			cache_put hash "$(file_sha "$body")"
+			cache_put version "$(sed -n 's/^TOOL_VERSION=\([^[:space:]]*\).*/\1/p' "$body" | head -n1)"
+		fi
+		rm -f "$body"
+	fi
+	refresh_release_cache
+	remote="$(cache_get hash)"
+	[ -n "$remote" ] || return 0
+	[ "$remote" = "$cur" ] && return 0
+	vremote="$(cache_get version)"
+	[ -n "$vremote" ] || vremote=main
+	msg "omp-termux update available: v$TOOL_VERSION (${cur:0:12}) -> v$vremote (${remote:0:12}); run 'omp-termux update-self'"
+}
+
+cmd_update_self() {
+	local tmp old new line code
+	tmp="$PREFIX/bin/omp-termux.new.$$"
+	mkdir -p "$PREFIX/bin"
+	msg "fetching $SELF_URL"
+	local rc=0
+	line="$(http "$SELF_URL" "$tmp" 20)" || rc=$?
+	code="${line%% *}"
+	case "$code" in
+		2??) ;;
+		000) [ "$rc" -eq 0 ] && [ -s "$tmp" ] || { rm -f "$tmp"; die "cannot fetch $SELF_URL"; } ;;
+		*) rm -f "$tmp"; die "cannot fetch $SELF_URL" ;;
+	esac
+	if ! bash -n "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		die "the downloaded script is not valid shell; kept the installed copy"
+	fi
+	old="$(file_sha "$PREFIX/bin/omp-termux")"
+	new="$(file_sha "$tmp")"
+	if [ -n "$old" ] && [ "$old" = "$new" ]; then
+		rm -f "$tmp"
+		result "already up to date (${new:0:12})"
+		return 0
+	fi
+	mv -f "$tmp" "$PREFIX/bin/omp-termux" || die "cannot replace $PREFIX/bin/omp-termux; the old copy is still in place"
+	chmod 0755 "$PREFIX/bin/omp-termux"
+	rm -f "$SELF_CACHE"     # the next check must re-fetch, not compare against the replaced copy's hash
+	result "updated ${old:0:12} -> ${new:0:12}"
+	link_self
+}
+
+# --- verbs ------------------------------------------------------------------------------------------
+resolve_target() { # $1 = install argument; prints version|file|published, dies when it cannot decide
+	local arg="$1" pub up rec current addon dir cli version
+	case "$arg" in
+		*/* | *.node)
+			require_file_arg "$arg"
+			version="$(artifact_version "$arg")"
+			[ -n "$version" ] || { err "the artifact reports no release; cannot tell which omp it belongs to"; return 1; }
+			printf '%s|%s|\n' "$version" "$arg"
+			return 0
+			;;
+	esac
+	pub="$(latest_release_version)"
+	[ -n "$pub" ] && record_release "$pub"
+	rec="$(installed_state)"
+	IFS='|' read -r current addon dir cli <<<"$rec"
+	case "$arg" in
+		"")
+			version="${OMP_TERMUX_VERSION:-${cli:-$current}}"
+			if [ -z "$version" ]; then
+				[ -n "$pub" ] || { err "no omp on this device and no published build to install (network?); pass one: omp-termux install <version>"; return 1; }
+				version="$pub"
+				msg "no omp on this device yet - installing $version (the newest build published here)"
+			fi
+			;;
+		latest)
+			if [ -z "$pub" ]; then
+				[ -n "$current" ] || { err "cannot resolve the newest build published here (network?); nothing was changed"; return 1; }
+				warn "cannot resolve the newest build published here (network?); keeping omp-$current"
+			fi
+			version="${pub:-$current}"
+			if [ -n "$pub" ]; then
+				up="$(latest_version)"
+				if [ -n "$up" ] && version_gt "$up" "$version"; then
+					msg "upstream $up is published but has no build here yet"
+				fi
+			fi
+			;;
+		*) version="${arg#v}" ;;
+	esac
+	[ -n "$version" ] || { err "not a version: $arg"; return 1; }
+	printf '%s||%s|\n' "$version" "$pub"
+}
+
+device_is_current() { # $1 = target version; 0 when the addon is in place, omp exists, and it loads
+	local version="$1" rec current addon dir cli log
+	rec="$(installed_state)"
+	IFS='|' read -r current addon dir cli <<<"$rec"
+	[ "$current" = "$version" ] && [ -f "$addon" ] && [ -n "$OMP_BIN" ] || return 1
+	log="$SCRATCH/$VERIFY_LOG"
+	# check_addons dies on a failed load, so it runs in a subshell; its output matters only when it fails
+	if ! ( check_addons 0 ) >"$log" 2>&1; then
+		[ -s "$log" ] && warn "the installed addon does not load; reinstalling it"
+		rm -f "$log"
+		return 1
+	fi
+	if ! "$OMP_BIN" --version >/dev/null 2>&1; then
+		warn "omp does not start; reinstalling it"
+		rm -f "$log"
+		return 1
+	fi
+	rm -f "$log"
+	return 0
+}
+
+cmd_install() { # $1 = version, "latest", a .node path, or empty (= the version this device runs)
+	local arg="${1:-}" rec rec_target version file pub current addon dir cli explicit=1 source n=0 m=0 d v
+	link_global_tree
+	rec="$(installed_state)"
+	IFS='|' read -r current addon dir cli <<<"$rec"
+	case "$arg" in "" | latest) explicit=0 ;; esac
+	rec_target="$(resolve_target "$arg")" || exit 1
+	IFS='|' read -r version file pub <<<"$rec_target"
+	if [ -z "$file" ] && device_is_current "$version"; then
+		drop_stray_scope_deps
+		cmd_install_self
+		result "nothing to do (omp $version)"
+		return 0
+	fi
+	# what is published bounds the targets the tool picks itself; a named version is the caller's call
+	if [ "$explicit" = 0 ] && [ -n "$cli" ] && [ -n "$pub" ] && version_gt "$cli" "$pub"; then
+		die "no build published here for the omp you run: $cli (newest: omp-$pub); nothing was changed
+        wait for that build, or step back: bun install -g @oh-my-pi/pi-coding-agent@$pub"
+	fi
+	if [ -n "$file" ]; then
+		source="$file"
+	else
+		source="$(fetch_release "$version")" || exit 1
+	fi
+	ensure_omp "$version"
+	install_addon "$source"
+	check_addons 0
+	if [ -z "$OMP_BIN" ] || ! "$OMP_BIN" --version >/dev/null 2>&1; then
+		die "omp does not start after the install" "run 'omp-termux verify' for the loader output"
+	fi
+	prune_superseded "$version"
+	cmd_install_self
+	while IFS= read -r d; do
+		v="$(json_version "$d/package.json")"
+		if [ "$v" = "$version" ]; then
+			n=$((n + 1))
+		else
+			m=$((m + 1))
+		fi
+	done < <(natives_dirs)
+	if [ "$m" -gt 0 ]; then
+		result "omp $version ready ($n addon copies, $m leftover)"
+	else
+		result "omp $version ready ($n addon copies)"
+	fi
+}
+
+show_path() { # $1 = path; $HOME collapsed to ~ unless OMP_TERMUX_VERBOSE is set
+	if [ -n "${OMP_TERMUX_VERBOSE:-}" ]; then
+		printf '%s\n' "$1"
+		return 0
+	fi
+	case "$1" in
+		"$HOME"/*) printf '~%s\n' "${1#"$HOME"}" ;;
+		*) printf '%s\n' "$1" ;;
+	esac
+}
+
+cmd_status() {
+	local rec version addon dir cli rel d v f size label first=1
+	update_checks_on && refresh_release_cache
+	rec="$(installed_state)"
+	IFS='|' read -r version addon dir cli <<<"$rec"
+	printf '%-9s omp-termux %s\n' "tool" "$(tool_label)"
+	printf '%-9s %s\n' "omp" "${cli:-none}"
+	while IFS= read -r d; do
+		v="$(json_version "$d/package.json")"
+		f="$d/native/$ADDON"
+		size="missing"
+		[ -f "$f" ] && size="$(du -h "$f" 2>/dev/null | cut -f1)"
+		if [ -n "$dir" ] && same_path "$d" "$dir"; then
+			label="loaded"
+		else
+			label="leftover"
+		fi
+		if [ "$first" = 1 ]; then
+			printf '%-9s %-8s %-5s %s\n' "addon" "$v" "$size" "$label"
+			first=0
+		else
+			printf '%-9s %-8s %-5s %s\n' "" "$v" "$size" "$label"
+		fi
+	done < <(natives_dirs)
+	rel="$(cache_get release)"
+	[ -n "$rel" ] && printf '%-9s omp-%s\n' "newest" "$rel"
+	printf '%-9s bun   %s\n' "paths" "$(show_path "$BUN_HOME")"
+	printf '%-9s omp   %s\n' "" "$(show_path "${OMP_BIN:-not found}")"
+	printf '%-9s tool  %s\n' "" "$(show_path "$SELF")"
+}
+
+cmd_doctor() {
+	local rec version addon dir cli
+	rec="$(installed_state)"
+	IFS='|' read -r version addon dir cli <<<"$rec"
+	# A non-login shell (how install.sh invokes the tool) may have PREFIX but no TERMUX_VERSION.
+	printf '%-9s %s\n' "termux" "${TERMUX_VERSION:-${TERMUX_PREFIX:-not detected}}"
+	printf '%-9s %s\n' "uname" "$(uname -s) $(uname -m)"
+	printf '%-9s %s\n' "tool" "$SELF"
+	printf '%-9s %s\n' "bun" "${BUN_BIN:-MISSING}"
+	printf '%-9s %s\n' "omp" "${OMP_BIN:-not found}"
+	printf '%-9s %s\n' "addon" "${version:-not found}"
+	printf '%-9s %s\n' "free" "$(df -h "$HOME" 2>/dev/null | awk 'NR==2{print $4}')"
+	[ -n "$BUN_BIN" ] || warn "bun is missing: 'omp-termux install latest' installs it together with omp"
+}
+
+# --- dispatch ---------------------------------------------------------------------------------------
+main() {
+	local verb="${1:-help}" arg=""
+	case "$verb" in
+		help | -h | --help)
+			[ "$#" -le 1 ] || die "unexpected argument: $2"
+			usage
+			return 0
+			;;
+		install)
+			shift
+			reject_option "${1:-}"
+			[ "$#" -le 1 ] || die "unexpected argument: $2"
+			arg="${1:-}"
+			;;
+		status | verify | doctor | update-self | uninstall-self)
+			reject_option "${2:-}"
+			[ "$#" -le 1 ] || die "unexpected argument: $2"
+			;;
+		*)
+			warn "unknown verb: $verb"
+			usage
+			exit 1
+			;;
+	esac
+	resolve_env
+	case "$verb" in
+		install | verify) scratch_open ;;
+	esac
+	[ "$verb" = update-self ] || check_self_update || true
+	case "$verb" in
+		install) cmd_install "$arg" ;;
+		status) cmd_status ;;
+		verify) run_verify ;;
+		doctor) cmd_doctor ;;
+		update-self) cmd_update_self ;;
+		uninstall-self) cmd_uninstall_self ;;
+	esac
+}
+
+# dev/omp-termux-dev sources this file for the shared names below; only an executed copy runs a verb (an
+# `if`, not `[ ] &&`: sourcing must not report failure under `set -e`). Shared: ADDON, UPSTREAM_REPO, REPO,
+# PROG, msg, result, warn, err, die, have, version_*, latest_version, artifact_version, file_sha, same_path,
+# reject_option, require_file_arg.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

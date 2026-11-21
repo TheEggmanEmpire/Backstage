@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- github-flavor override of Dextop's res/xml/mirror_accessibility_service.xml (flavor resources win over main): the
+     app's ONE accessibility service. Dextop's MirrorService runs the desktop and, through the glue, is also the agent's
+     eyes and hands (com.eggman.backstage.a11y.AccessibilityBridge).
+
+     Upstream's settings, all kept:
+       events typeViewClicked|typeViewFocused|typeViewTextChanged|typeViewTextSelectionChanged|typeWindowStateChanged|
+              typeWindowsChanged
+       flags  flagSendMotionEvents|flagRetrieveInteractiveWindows
+       canRetrieveWindowContent, feedbackGeneric, notificationTimeout 100
+     Required for the agent:
+       events typeWindowContentChanged|typeViewScrolled (UI-settle detection), typeNotificationStateChanged
+              (get_notifications); patch 0001 hands MirrorService's own handler only the event types listed above as
+              upstream's (BackstageAccessibilityEvents), so Dextop sees exactly the events it saw before
+       flags  flagDefault|flagReportViewIds|flagIncludeNotImportantViews (complete screen reading, resource ids)
+       canPerformGestures (taps/swipes on the phone and as desktop fallback), canTakeScreenshot (phone screenshots)
+       isAccessibilityTool (declares the service an accessibility tool: on Android 14+ views marked
+              accessibilityDataSensitive are hidden from, and refuse actions by, services that are not)
+     Key filtering is disabled: the service cannot read every hardware keystroke. Physical keyboards reach the
+     desktop through Dextop's evdev routing (PhysicalDeviceRouting, Shizuku), which requires privilege and does not
+     need accessibility. Phone-side typing falls back to InputInjector.key.
+     scripts/lib/verify_apk.py checks the compiled file: these flags, events and capabilities, and only this service. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewClicked|typeViewFocused|typeViewTextChanged|typeViewTextSelectionChanged|typeWindowStateChanged|typeWindowsChanged|typeWindowContentChanged|typeViewScrolled|typeNotificationStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagSendMotionEvents|flagRetrieveInteractiveWindows|flagReportViewIds|flagIncludeNotImportantViews"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:description="@string/backstage_accessibility_description"
+    android:isAccessibilityTool="true"
+    android:notificationTimeout="100" />

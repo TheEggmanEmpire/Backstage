@@ -1,0 +1,74 @@
+name: Set up the Backstage toolchain
+description: >-
+  Java, Flutter and CMake at the versions pinned in toolchain.env (derived from upstream Dextop's own CI by
+  scripts/flutter-version.sh), Android SDK platform 36, build-tools, NDK 28.2.13676358, plus Gradle caching.
+inputs:
+  cache:
+    description: >-
+      'on' (default): restore and save the Flutter SDK, pub and Gradle caches. 'off': neither restore nor save any
+      cache. Use 'off' in jobs that run untrusted upstream code (they must never write a cache that a trusted job
+      restores) and in the signed-release job (it must start from clean downloads, never from a cache another job
+      wrote).
+    required: false
+    default: 'on'
+outputs:
+  flutter-version:
+    description: Flutter version read from toolchain.env
+    value: ${{ steps.pin.outputs.flutter }}
+runs:
+  using: composite
+  steps:
+    - name: Read the Flutter pin
+      id: pin
+      shell: bash
+      env:
+        CACHE_MODE: ${{ inputs.cache }}
+      run: |
+        case "$CACHE_MODE" in on|off) ;; *) echo "::error::setup-toolchain: cache must be 'on' or 'off', got '$CACHE_MODE'"; exit 1 ;; esac
+        . ./toolchain.env
+        test -n "${FLUTTER_VERSION:-}" || { echo "::error::FLUTTER_VERSION missing in toolchain.env"; exit 1; }
+        echo "flutter=$FLUTTER_VERSION" >> "$GITHUB_OUTPUT"
+        echo "channel=${FLUTTER_CHANNEL:-stable}" >> "$GITHUB_OUTPUT"
+        echo "java=${JAVA_VERSION:-17}" >> "$GITHUB_OUTPUT"
+        echo "cmake=${CMAKE_VERSION:-3.22.1}" >> "$GITHUB_OUTPUT"
+        echo "Toolchain pin: Flutter $FLUTTER_VERSION, Java ${JAVA_VERSION:-17}, CMake ${CMAKE_VERSION:-3.22.1}"
+
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: ${{ steps.pin.outputs.java }}
+
+    # Third-party actions are pinned to a commit (a re-pointed tag must not run next to caches or the release keys);
+  # Third-party action revisions are pinned explicitly.
+    - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+      with:
+        channel: ${{ steps.pin.outputs.channel }}
+        flutter-version: ${{ steps.pin.outputs.flutter }}
+        # The SDK and pub-cache keys do not depend on the job, so a job running untrusted code must not save them.
+        cache: ${{ inputs.cache == 'on' }}
+
+    # Uses the runner's preinstalled SDK ($ANDROID_HOME, /usr/local/lib/android/sdk): scripts/ci-free-disk-space.sh
+    # never removes it. Three attempts; the step fails when all of them do (a missing NDK/CMake/platform would
+    # otherwise only surface deep inside Gradle).
+    - name: Android SDK packages
+      shell: bash
+      env:
+        CMAKE_VERSION: ${{ steps.pin.outputs.cmake }}
+      run: |
+        sdkmanager="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+        yes | "$sdkmanager" --licenses > /dev/null || true
+        ok=
+        for attempt in 1 2 3; do
+          if "$sdkmanager" --install "platforms;android-36" "build-tools;35.0.0" "build-tools;36.0.0" \
+               "ndk;28.2.13676358" "cmake;$CMAKE_VERSION" > /dev/null; then ok=1; break; fi
+          echo "sdkmanager attempt $attempt failed"
+          [ "$attempt" = 3 ] || sleep 15
+        done
+        [ -n "$ok" ] || { echo "::error::sdkmanager could not install the Android SDK packages (3 attempts)"; exit 1; }
+        flutter config --no-analytics > /dev/null
+        flutter config --android-sdk "${ANDROID_HOME:-$ANDROID_SDK_ROOT}" > /dev/null
+
+    - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
+      with:
+        cache-disabled: ${{ inputs.cache == 'off' }}
+        cache-read-only: ${{ github.ref != 'refs/heads/main' }}

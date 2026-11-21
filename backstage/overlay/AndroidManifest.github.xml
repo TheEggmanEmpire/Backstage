@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- github-flavor manifest overlay (backstage/dextop-integration.gradle). Flavor manifests take priority
+     over main and over library manifests, so tools:node="remove" can drop upstream and library declarations
+     without patching upstream. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Upstream declares this permission with a literal (not ${applicationId}) name and nothing uses it
+         (no uses-permission, no android:permission= anywhere in Dextop or its Car Companion; the companion relay
+         service, removed below, authenticated callers by package + certificate in CardCompanionCallerVerifier).
+         Declaring it in Backstage would make installation next to upstream Dextop fail with
+         INSTALL_FAILED_DUPLICATE_PERMISSION, so Backstage does not declare it. -->
+    <permission
+        android:name="moe.n4tsu.dextop.permission.CARDEX_RELAY"
+        tools:node="remove" />
+
+    <!-- No telemetry, no advertising. Upstream Dextop depends on firebase_analytics, whose
+         measurement SDK merges in the advertising-ID / ad-services / install-referrer permissions and starts its
+         init provider and measurement services on every launch. patches/0004-no-google-sdks removes Firebase and
+         Google Analytics from Backstage builds altogether; these removals and the deactivation flags below stay as
+         a guard, so nothing of it can run should an upstream update bring the SDK back unnoticed.
+         scripts/lib/verify_apk.py fails on any of them. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION" tools:node="remove" />
+    <uses-permission android:name="com.google.android.finsky.permission.BIND_GET_INSTALL_REFERRER_SERVICE"
+        tools:node="remove" />
+
+    <!-- One app, one launcher icon. The app is "Backstage" with the
+         Backstage icon everywhere the system names it (launcher, app info, Shizuku, sharing, recents). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <application
+        android:icon="@mipmap/bs_ic_launcher"
+        android:label="@string/bs_agent_label"
+        android:roundIcon="@mipmap/bs_ic_launcher"
+        tools:replace="android:icon,android:label">
+        <!-- User-confirmed in-app updater components. -->
+        <service android:name="com.eggman.backstage.update.UpdateDownloadService" android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <receiver android:name="com.eggman.backstage.update.UpdateCancelReceiver" android:exported="false" />
+        <receiver android:name="com.eggman.backstage.update.UpdateStatusReceiver" android:exported="false" />
+        <receiver android:name="com.eggman.backstage.update.UpdateAlarmReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+            </intent-filter>
+        </receiver>
+        <activity android:name="com.eggman.backstage.update.UpdateOpenActivity" android:exported="false"
+            android:theme="@android:style/Theme.NoDisplay" />
+        <activity android:name="com.eggman.backstage.update.UpdateConfirmationActivity" android:exported="false" />
+
+
+        <!-- The ONE launcher entry is Dextop's own launcher trampoline: it opens Home (with the live desktop player and
+             the "Agent" destination, patches/0005) on the phone, or Dextop's desktop UI on the desktop display. Its label
+             is the app name ("Backstage", @string/app_name, overlay res) and it inherits the application icon. The
+             agent screen (com.eggman.backstage.ui.AgentScreenActivity, library manifest) is no launcher entry any more.
+             scripts/lib/verify_apk.py fails unless exactly this one phone launcher exists, exported, labelled
+             "Backstage". -->
+        <activity
+            android:name="moe.n4tsu.dextop.DextopLauncherActivity"
+            android:label="@string/app_name"
+            tools:replace="android:label" />
+
+        <!-- The app's ONE accessibility service: Dextop's MirrorService runs the desktop and serves the agent (the glue
+             forwards it to the library's AccessibilityBridge). One entry, "Backstage", in Android's accessibility
+             settings; its configuration (capabilities for both uses) is res/xml/mirror_accessibility_service.xml. -->
+        <service
+            android:name="moe.n4tsu.dextop.MirrorService"
+            android:label="@string/backstage_accessibility_label" />
+
+        <!-- Backstage does not build or ship Dextop's
+             Car Companion app, and everything of Dextop that only served it is removed from the app: the exported relay
+             the companion binds to (it accepted only this build's own companion, CardCompanionCallerVerifier), the
+             relay's recovery receiver, and the two car display activities only the relay starts. The classes stay
+             compiled (upstream code calls their static helpers; none of them starts these components any more), so
+             upstream's sources are untouched. Without the companion there is no Android Auto / car display; Dextop's
+             car settings only show while a companion package is installed (MainActivity "carCompanionInstalled").
+             scripts/lib/verify_apk.py fails if any of them is declared again. -->
+        <service
+            android:name="moe.n4tsu.dextop.CardexRelayService"
+            tools:node="remove" />
+        <receiver
+            android:name="moe.n4tsu.dextop.CardexRecoveryReceiver"
+            tools:node="remove" />
+        <activity
+            android:name="moe.n4tsu.dextop.CarCompanionPhoneActivity"
+            tools:node="remove" />
+        <activity
+            android:name="moe.n4tsu.dextop.AndroidAutoMirrorActivity"
+            tools:node="remove" />
+
+        <!-- Firebase auto-initialisation at process start. -->
+        <provider
+            android:name="com.google.firebase.provider.FirebaseInitProvider"
+            android:authorities="${applicationId}.firebaseinitprovider"
+            tools:node="remove" />
+        <!-- Google Analytics for Firebase measurement components. -->
+        <receiver
+            android:name="com.google.android.gms.measurement.AppMeasurementReceiver"
+            tools:node="remove" />
+        <service
+            android:name="com.google.android.gms.measurement.AppMeasurementService"
+            tools:node="remove" />
+        <service
+            android:name="com.google.android.gms.measurement.AppMeasurementJobService"
+            tools:node="remove" />
+        <!-- Android Privacy Sandbox ad-services library hook of the measurement SDK. -->
+        <uses-library
+            android:name="android.ext.adservices"
+            tools:node="remove" />
+
+        <!-- Belt and braces: Analytics stays permanently off and never reads the advertising ID or SSAID, even
+             if the SDK and a google-services.json came back (upstream called setAnalyticsCollectionEnabled(true),
+             which this deactivation flag overrides). -->
+        <meta-data android:name="firebase_analytics_collection_deactivated" android:value="true" />
+        <meta-data android:name="firebase_analytics_collection_enabled" android:value="false" />
+        <meta-data android:name="google_analytics_adid_collection_enabled" android:value="false" />
+        <meta-data android:name="google_analytics_ssaid_collection_enabled" android:value="false" />
+        <meta-data android:name="google_analytics_default_allow_ad_personalization_signals" android:value="false" />
+        <meta-data android:name="google_analytics_default_allow_ad_user_data" android:value="false" />
+    </application>
+</manifest>

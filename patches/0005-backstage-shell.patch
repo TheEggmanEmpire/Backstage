@@ -1,0 +1,1514 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TheEggmanEmpire <backstage@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 12:00:00 +0000
+Subject: [PATCH] backstage-shell
+
+Integrate the agent tab and live desktop player into the app's Home screen. Register shared native channels, forward desktop state and input, and use one app launcher.
+---
+ .../moe/n4tsu/dextop/BackstageShellHooks.kt   |  17 +
+ .../kotlin/moe/n4tsu/dextop/MainActivity.kt   |   4 +
+ assets/backstage_icon.png                     | Bin 0 -> 4434 bytes
+ lib/app_info.dart                             |   8 +-
+ lib/backstage_shell.dart                      | 500 ++++++++++++++++++
+ lib/home_content.dart                         |   5 +-
+ lib/home_screen.dart                          |  21 +-
+ lib/l10n/app_en.arb                           |  18 +-
+ lib/l10n/app_localizations_en.dart            |  18 +-
+ lib/main.dart                                 |   1 +
+ lib/settings_screen.dart                      |   2 +
+ lib/setup_page.dart                           |   2 +-
+ pubspec.yaml                                  |   2 +-
+ test/backstage_shell_test.dart                | 448 ++++++++++++++++
+ test/control_screen_test.dart                 |   4 +-
+ 15 files changed, 1015 insertions(+), 35 deletions(-)
+ create mode 100644 android/app/src/main/kotlin/moe/n4tsu/dextop/BackstageShellHooks.kt
+ create mode 100644 assets/backstage_icon.png
+ create mode 100644 lib/backstage_shell.dart
+ create mode 100644 test/backstage_shell_test.dart
+
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/BackstageShellHooks.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/BackstageShellHooks.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..c6c8e608db785cc75bcd5bc51b445102d5238454
+--- /dev/null
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/BackstageShellHooks.kt
+@@ -0,0 +1,17 @@
++package moe.n4tsu.dextop
++
++import android.app.Activity
++import android.content.Intent
++import io.flutter.embedding.engine.FlutterEngine
++
++/**
++ * Backstage (patch 0006-backstage-shell): where the Backstage glue meets the Flutter engine of Dextop's own activities
++ * (MainActivity and its desktop-window subclass). The glue registers its shell channel and the live desktop player's
++ * texture there; [onEngineCleanup] runs before the engine (and every texture it owns) is destroyed. Inert (null) in
++ * upstream builds.
++ */
++object BackstageShellHooks {
++    @Volatile @JvmStatic var onIntent: ((Activity, Intent) -> Unit)? = null
++    @Volatile @JvmStatic var onEngine: ((Activity, FlutterEngine) -> Unit)? = null
++    @Volatile @JvmStatic var onEngineCleanup: ((Activity, FlutterEngine) -> Unit)? = null
++}
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
+index c367d3580ee6e46fe354f4a6ff30783daabe4619..06ac314cfb79d535ef9afcd09c7eaa86f745a01c 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
+@@ -162,6 +162,7 @@ open class MainActivity : FlutterActivity() {
+     override fun onCreate(savedInstanceState: Bundle?) {
+         applyDefaultWindowManager()
+         super.onCreate(savedInstanceState)
++        BackstageShellHooks.onIntent?.invoke(this, intent)
+         // Flutter draws its own focus indicators. Android's legacy theme otherwise
+         // outlines the focused, full-screen FlutterView in yellow-green.
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+@@ -277,6 +278,7 @@ open class MainActivity : FlutterActivity() {
+     override fun onNewIntent(intent: Intent) {
+         super.onNewIntent(intent)
+         setIntent(intent)
++        BackstageShellHooks.onIntent?.invoke(this, intent)
+         if (DextopShortcuts.isStartDisplayAction(intent.action)) {
+             // A shortcut tapped while the app is already in the foreground gets
+             // no lifecycle callback, so forward the action to Flutter directly.
+@@ -296,6 +298,7 @@ open class MainActivity : FlutterActivity() {
+ 
+     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+         super.configureFlutterEngine(flutterEngine)
++        BackstageShellHooks.onEngine?.invoke(this, flutterEngine)
+         updatePrivilegeRuntimePolicy()
+         Shizuku.addRequestPermissionResultListener(permissionListener)
+         Shizuku.addBinderReceivedListenerSticky(binderReceivedListener)
+@@ -702,6 +705,7 @@ open class MainActivity : FlutterActivity() {
+     }
+ 
+     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
++        BackstageShellHooks.onEngineCleanup?.invoke(this, flutterEngine)
+         Shizuku.removeRequestPermissionResultListener(permissionListener)
+         Shizuku.removeBinderReceivedListener(binderReceivedListener)
+         Shizuku.removeBinderDeadListener(binderDeadListener)
+diff --git a/assets/backstage_icon.png b/assets/backstage_icon.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..dfefafb1618d567fb640a23f2243d665f1c0f62b
+GIT binary patch
+literal 4434
+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
+Gn12DCKLY#!
+
+literal 0
+HcmV?d00001
+
+diff --git a/lib/app_info.dart b/lib/app_info.dart
+index e8155171b8fdd3bbe36c20dc9e86ae96d060f654..a363b852e59570864bf7de82975d780effea29e6 100644
+--- a/lib/app_info.dart
++++ b/lib/app_info.dart
+@@ -46,14 +46,14 @@ class AppInfoPage extends StatelessWidget {
+                 ClipRRect(
+                   borderRadius: BorderRadius.all(Radius.circular(24)),
+                   child: Image(
+-                    image: AssetImage('assets/dextop_icon.png'),
++                    image: AssetImage(backstageIconAsset),
+                     width: 96,
+                     height: 96,
+                   ),
+                 ),
+                 SizedBox(height: 16),
+                 Text(
+-                  currentLocalizations().appName,
++                  backstageAppName,
+                   style: Theme.of(context).textTheme.headlineMedium,
+                 ),
+                 SizedBox(height: 4),
+@@ -189,12 +189,12 @@ class AppInfoPage extends StatelessWidget {
+                 trailing: Icon(Icons.chevron_right_rounded),
+                 onTap: () => showLicensePage(
+                   context: context,
+-                  applicationName: currentLocalizations().appName,
++                  applicationName: backstageAppName,
+                   applicationVersion: appVersion,
+                   applicationIcon: ClipRRect(
+                     borderRadius: BorderRadius.all(Radius.circular(16)),
+                     child: Image(
+-                      image: AssetImage('assets/dextop_icon.png'),
++                      image: AssetImage(backstageIconAsset),
+                       width: 64,
+                       height: 64,
+                     ),
+diff --git a/lib/backstage_shell.dart b/lib/backstage_shell.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..8ca52f7b6e14d753b25e9527f7284b51236a3ce3
+--- /dev/null
++++ b/lib/backstage_shell.dart
+@@ -0,0 +1,500 @@
++part of 'main.dart';
++
++// Backstage (patch 0005-backstage-shell): the app shell around Dextop's Home.
++//
++// * One launcher icon "Backstage" opens this Home. Its second destination, "Agent", opens Backstage's agent screen
++//   (a native activity in the same task, shown without a transition); Dextop's own page indices stay unchanged.
++// * The live desktop plays at the top of Home: the running desktop renders into a Flutter texture (presentation
++//   IN_APP, see MirrorService.Backstage); touches on it go to the desktop. Full screen / Pop out / Background / Stop.
++//   Without a running desktop the card offers Start (in the app, never a full-screen takeover).
++// Native side: backstage/dextop-glue BackstageShell.kt on the channel below.
++
++const String backstageAppName = 'Backstage';
++const String backstageIconAsset = 'assets/backstage_icon.png';
++
++class BackstageShellBridge {
++  BackstageShellBridge._();
++
++  static const MethodChannel channel = MethodChannel(
++    'com.eggman.backstage/shell',
++  );
++  static final StreamController<void> _changes =
++      StreamController<void>.broadcast();
++  static final StreamController<String> _pages =
++      StreamController<String>.broadcast();
++  static final ValueNotifier<bool> homeVisible = ValueNotifier(false);
++  static bool _listening = false;
++
++  static void _listen() {
++    if (_listening) return;
++    _listening = true;
++    channel.setMethodCallHandler((call) async {
++      if (call.method == 'changed') _changes.add(null);
++      if (call.method == 'selectPage' &&
++          backstageShellPageIndex(call.arguments) != null &&
++          _pages.hasListener) {
++        _pages.add(call.arguments as String);
++        return true;
++      }
++      return false;
++    });
++  }
++
++  static Stream<void> get changes {
++    _listen();
++    return _changes.stream;
++  }
++
++  static Stream<String> get pages {
++    _listen();
++    return _pages.stream;
++  }
++
++  static Future<T?> invoke<T>(String method, [Object? arguments]) async {
++    try {
++      return await channel.invokeMethod<T>(method, arguments);
++    } on MissingPluginException {
++      return null;
++    } on PlatformException {
++      return null;
++    }
++  }
++
++  static Future<void> openAgent({bool settings = false}) =>
++      invoke<bool>('openAgent', {'screen': settings ? 'settings' : null});
++}
++
++/// A strict allow-list: these are the four-item shell indices accepted by backstageNavSelect.
++int? backstageShellPageIndex(Object? page) => switch (page) {
++  'home' => 0,
++  'linux' => 2,
++  'settings' => 3,
++  _ => null,
++};
++
++extension _BackstageShell on _HomeScreenState {
++  void backstageInit() {
++    if (!backstageAiTab) return;
++    BackstageShellBridge.homeVisible.value = page == 0;
++    backstagePageSubscription = BackstageShellBridge.pages.listen((target) {
++      if (mounted) backstageNavSelect(backstageShellPageIndex(target)!);
++    });
++    BackstageShellBridge.invoke<String>('takeShellPage').then((target) {
++      final index = backstageShellPageIndex(target);
++      if (mounted && index != null) backstageNavSelect(index);
++    });
++  }
++
++  void backstagePageSelected(int target) {
++    if (backstageAiTab) BackstageShellBridge.homeVisible.value = target == 0;
++  }
++
++  Widget backstageAiSettingsTile() => ListTile(
++    leading: const Icon(Icons.auto_awesome_outlined),
++    title: const Text('Agent settings'),
++    onTap: () {
++      BackstageShellBridge.homeVisible.value = false;
++      BackstageShellBridge.openAgent(settings: true);
++    },
++  );
++
++  /// The Agent destination exists on the phone UI; Dextop's UI inside the desktop window keeps its own three.
++  bool get backstageAiTab => !widget.desktopWindow;
++
++  /// Navigation index shown for Dextop's [page]: Home, Agent, Linux, Settings.
++  int backstageNavIndex(int page) =>
++      backstageAiTab && page >= 1 ? page + 1 : page;
++
++  void backstageNavSelect(int index) {
++    if (backstageAiTab && index == 1) {
++      BackstageShellBridge.homeVisible.value = false;
++      BackstageShellBridge.openAgent();
++      return;
++    }
++    selectPage(backstageAiTab && index > 1 ? index - 1 : index);
++  }
++
++  List<NavigationRailDestination> backstageRailDestinations() => [
++    if (backstageAiTab)
++      const NavigationRailDestination(
++        icon: Icon(Icons.auto_awesome_outlined),
++        selectedIcon: Icon(Icons.auto_awesome),
++        label: Text('Agent'),
++      ),
++  ];
++
++  List<NavigationDestination> backstageBarDestinations() => [
++    if (backstageAiTab)
++      const NavigationDestination(
++        icon: Icon(Icons.auto_awesome_outlined),
++        selectedIcon: Icon(Icons.auto_awesome),
++        label: 'Agent',
++      ),
++  ];
++
++  /// The live desktop card at the top of Home (phone UI only).
++  List<Widget> backstageHomePlayer() => [
++    if (!widget.desktopWindow) const BackstageLivePlayer(),
++  ];
++}
++
++/// Pure mapping of a point in the player (logical px) to desktop pixels, clamped to the desktop.
++Offset backstagePlayerToDesktop(
++  Offset local,
++  Size box,
++  int desktopWidth,
++  int desktopHeight,
++) {
++  if (box.width <= 0 || box.height <= 0) return Offset.zero;
++  final x = (local.dx / box.width * desktopWidth).clamp(
++    0.0,
++    desktopWidth - 1.0,
++  );
++  final y = (local.dy / box.height * desktopHeight).clamp(
++    0.0,
++    desktopHeight - 1.0,
++  );
++  return Offset(x.toDouble(), y.toDouble());
++}
++
++enum BackstagePreviewAction { none, show, restore }
++
++/// Automatic preview never steals MINI/FULL. The per-visit attempt latch lives in the widget.
++BackstagePreviewAction backstagePreviewAction(
++  String presentation,
++  bool visible,
++  bool autoSwitched,
++) {
++  if (visible && presentation == 'hidden' && !autoSwitched)
++    return BackstagePreviewAction.show;
++  if (!visible && presentation == 'in_app' && autoSwitched)
++    return BackstagePreviewAction.restore;
++  return BackstagePreviewAction.none;
++}
++
++class BackstageLivePlayer extends StatefulWidget {
++  const BackstageLivePlayer({super.key});
++
++  @override
++  State<BackstageLivePlayer> createState() => _BackstageLivePlayerState();
++}
++
++class _BackstageLivePlayerState extends State<BackstageLivePlayer>
++    with WidgetsBindingObserver {
++  static const _touchDown = 0;
++  static const _touchMove = 1;
++  static const _touchUp = 2;
++  static const _touchCancel = 3;
++
++  bool foreground = true;
++  bool attempted = false;
++  bool autoSwitched = false;
++  bool refreshing = false;
++  bool refreshAgain = false;
++  bool previewBusy = false;
++  bool get visible => foreground && BackstageShellBridge.homeVisible.value;
++
++  bool available = false;
++  bool running = false;
++  bool starting = false;
++  bool privileged = false;
++  String presentation = 'none';
++  int width = 0;
++  int height = 0;
++  int? textureId;
++  int? pointer;
++  StreamSubscription<void>? subscription;
++  Timer? poll;
++  Timer? startTimeout;
++
++  @override
++  void initState() {
++    super.initState();
++    foreground =
++        WidgetsBinding.instance.lifecycleState == null ||
++        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
++    WidgetsBinding.instance.addObserver(this);
++    BackstageShellBridge.homeVisible.addListener(visibilityChanged);
++    subscription = BackstageShellBridge.changes.listen((_) => refresh());
++    poll = Timer.periodic(const Duration(seconds: 2), (_) => refresh());
++    refresh();
++  }
++
++  @override
++  void dispose() {
++    WidgetsBinding.instance.removeObserver(this);
++    BackstageShellBridge.homeVisible.removeListener(visibilityChanged);
++    // Native verifies ownership and presentation again, including when a switch is still in flight.
++    BackstageShellBridge.invoke<bool>('previewRestore');
++    subscription?.cancel();
++    poll?.cancel();
++    startTimeout?.cancel();
++    if (textureId != null) BackstageShellBridge.invoke<bool>('playerDetach');
++    super.dispose();
++  }
++
++  @override
++  void didChangeAppLifecycleState(AppLifecycleState state) {
++    foreground = state == AppLifecycleState.resumed;
++    // Agent returns to the same Home state; native pause has already released the previous preview.
++    visibilityChanged();
++  }
++
++  void visibilityChanged() {
++    if (!visible) {
++      attempted = false;
++      BackstageShellBridge.invoke<bool>('previewRestore');
++      autoSwitched = false;
++      if (textureId != null) {
++        BackstageShellBridge.invoke<bool>('playerDetach');
++        textureId = null;
++      }
++    }
++    refresh();
++  }
++
++  Future<void> syncPreview() async {
++    final action = backstagePreviewAction(presentation, visible, autoSwitched);
++    if (previewBusy || action == BackstagePreviewAction.none) return;
++    if (action == BackstagePreviewAction.show && attempted) return;
++    previewBusy = true;
++    if (action == BackstagePreviewAction.show) {
++      attempted = true; // Failure gets a manual button, never another automatic attempt this visit.
++      final ok = await BackstageShellBridge.invoke<bool>('previewShow');
++      autoSwitched = ok == true;
++      if (mounted && ok == true) setState(() => presentation = 'in_app');
++      if (!mounted || !visible) {
++        await BackstageShellBridge.invoke<bool>('previewRestore');
++        autoSwitched = false;
++      }
++    } else {
++      await BackstageShellBridge.invoke<bool>('previewRestore');
++      autoSwitched = false;
++    }
++    if (mounted)
++      setState(() => previewBusy = false);
++    else
++      previewBusy = false;
++  }
++
++  Future<void> refresh() async {
++    if (refreshing) {
++      refreshAgain = true;
++      return;
++    }
++    refreshing = true;
++    try {
++      do {
++        refreshAgain = false;
++        await refreshState();
++      } while (mounted && refreshAgain);
++    } finally {
++      refreshing = false;
++    }
++  }
++
++  Future<void> refreshState() async {
++    final state = await BackstageShellBridge.invoke<Map<Object?, Object?>>(
++      'state',
++    );
++    if (!mounted) return;
++    if (state == null) {
++      if (available) setState(() => available = false);
++      return;
++    }
++    final nowRunning = state['running'] == true;
++    final nowWidth = (state['width'] as num?)?.toInt() ?? 0;
++    final nowHeight = (state['height'] as num?)?.toInt() ?? 0;
++    setState(() {
++      available = state['playerAllowed'] == true;
++      privileged = state['privileged'] == true;
++      running = nowRunning;
++      presentation = state['presentation'] as String? ?? 'none';
++      width = nowWidth;
++      height = nowHeight;
++      if (running) starting = false;
++    });
++    if (!available) return;
++    if (autoSwitched && presentation != 'in_app') autoSwitched = false;
++    if (running) await syncPreview();
++    if (!mounted || !visible) return;
++    if (running && (textureId == null || state['textureId'] == null)) {
++      final player = await BackstageShellBridge.invoke<Map<Object?, Object?>>(
++        'playerAttach',
++      );
++      if (!mounted) return;
++      setState(() => textureId = (player?['textureId'] as num?)?.toInt());
++    } else if (!running && textureId != null) {
++      await BackstageShellBridge.invoke<bool>('playerDetach');
++      if (!mounted) return;
++      setState(() => textureId = null);
++    }
++  }
++
++  Future<void> start() async {
++    setState(() => starting = true);
++    final accepted = await BackstageShellBridge.invoke<bool>('start');
++    if (!mounted) return;
++    if (accepted != true) setState(() => starting = false);
++    startTimeout?.cancel();
++    startTimeout = Timer(const Duration(seconds: 20), () {
++      if (mounted && starting) setState(() => starting = false);
++    });
++  }
++
++  Future<void> present(String target) async {
++    autoSwitched = false;
++    attempted = true;
++    await BackstageShellBridge.invoke<bool>('present', {
++      'presentation': target,
++    });
++    refresh();
++  }
++
++  void touch(int action, Offset local, Size box) {
++    final point = backstagePlayerToDesktop(local, box, width, height);
++    BackstageShellBridge.invoke<bool>('touch', {
++      'action': action,
++      'x': point.dx,
++      'y': point.dy,
++    });
++  }
++
++  Widget picture(ColorScheme colors) {
++    final inApp = presentation == 'in_app' && textureId != null;
++    final aspect = width > 0 && height > 0 ? width / height : 16 / 9;
++    return AspectRatio(
++      aspectRatio: aspect,
++      child: ClipRRect(
++        borderRadius: BorderRadius.circular(16),
++        child: ColoredBox(
++          color: Colors.black,
++          child: inApp
++              ? LayoutBuilder(
++                  builder: (context, constraints) {
++                    final box = constraints.biggest;
++                    return Listener(
++                      behavior: HitTestBehavior.opaque,
++                      onPointerDown: (e) {
++                        if (pointer != null) return;
++                        pointer = e.pointer;
++                        touch(_touchDown, e.localPosition, box);
++                      },
++                      onPointerMove: (e) {
++                        if (e.pointer == pointer)
++                          touch(_touchMove, e.localPosition, box);
++                      },
++                      onPointerUp: (e) {
++                        if (e.pointer != pointer) return;
++                        pointer = null;
++                        touch(_touchUp, e.localPosition, box);
++                      },
++                      onPointerCancel: (e) {
++                        if (e.pointer != pointer) return;
++                        pointer = null;
++                        touch(_touchCancel, e.localPosition, box);
++                      },
++                      child: Texture(textureId: textureId!),
++                    );
++                  },
++                )
++              : presentation == 'hidden' && (!attempted || previewBusy)
++              ? const Center(child: CircularProgressIndicator())
++              : Center(
++                  child: TextButton.icon(
++                    onPressed: () => present('in_app'),
++                    icon: const Icon(Icons.play_circle_outline),
++                    label: Text(switch (presentation) {
++                      'mini' => 'Playing in the popup. Show it here',
++                      'hidden' => 'Running in the background. Show it here',
++                      'full' => 'Showing full screen. Show it here',
++                      _ => 'Show the desktop here',
++                    }),
++                  ),
++                ),
++        ),
++      ),
++    );
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    if (!available) return const SizedBox.shrink();
++    final colors = Theme.of(context).colorScheme;
++    return Padding(
++      padding: const EdgeInsets.only(bottom: 16),
++      child: Card(
++        key: const ValueKey('backstage-live-player'),
++        elevation: 0,
++        color: colors.surfaceContainerHigh,
++        child: Padding(
++          padding: const EdgeInsets.all(12),
++          child: running
++              ? Column(
++                  crossAxisAlignment: CrossAxisAlignment.stretch,
++                  children: [
++                    picture(colors),
++                    const SizedBox(height: 8),
++                    Wrap(
++                      alignment: WrapAlignment.center,
++                      spacing: 4,
++                      children: [
++                        TextButton.icon(
++                          onPressed: () => present('full'),
++                          icon: const Icon(Icons.fullscreen),
++                          label: const Text('Full screen'),
++                        ),
++                        TextButton.icon(
++                          onPressed: () => present('mini'),
++                          icon: const Icon(
++                            Icons.picture_in_picture_alt_outlined,
++                          ),
++                          label: const Text('Pop out'),
++                        ),
++                        TextButton.icon(
++                          onPressed: () => present('hidden'),
++                          icon: const Icon(Icons.headphones_outlined),
++                          label: const Text('Background'),
++                        ),
++                        TextButton.icon(
++                          onPressed: () async {
++                            await BackstageShellBridge.invoke<bool>('stop');
++                            refresh();
++                          },
++                          icon: const Icon(Icons.stop_circle_outlined),
++                          label: const Text('Stop'),
++                        ),
++                      ],
++                    ),
++                  ],
++                )
++              : Row(
++                  children: [
++                    Icon(Icons.desktop_windows_outlined, color: colors.primary),
++                    const SizedBox(width: 12),
++                    Expanded(
++                      child: Text(
++                        privileged
++                            ? 'The desktop is not running.'
++                            : 'Finish the setup below to start the desktop.',
++                      ),
++                    ),
++                    FilledButton.icon(
++                      key: const ValueKey('backstage-start-desktop'),
++                      onPressed: starting || !privileged ? null : start,
++                      icon: starting
++                          ? const SizedBox(
++                              width: 18,
++                              height: 18,
++                              child: CircularProgressIndicator(strokeWidth: 2),
++                            )
++                          : const Icon(Icons.play_arrow_rounded),
++                      label: const Text('Start desktop'),
++                    ),
++                  ],
++                ),
++        ),
++      ),
++    );
++  }
++}
+diff --git a/lib/home_content.dart b/lib/home_content.dart
+index e02617c11a265059de3bf04795befbc8fc4beee7..c2fc8ab949952f91217f28142b92d622e0a3a642 100644
+--- a/lib/home_content.dart
++++ b/lib/home_content.dart
+@@ -4,6 +4,7 @@ extension _HomeContent on _HomeScreenState {
+   Widget overview() {
+     final wide = wideLayout;
+     final session = <Widget>[
++      ...backstageHomePlayer(),
+       heroPanel(),
+       SizedBox(height: 16),
+       if (!active &&
+@@ -42,12 +43,12 @@ extension _HomeContent on _HomeScreenState {
+             pinned: true,
+             toolbarHeight: 64,
+             titleSpacing: 24,
+-            title: Text(currentLocalizations().appName),
++            title: Text(backstageAppName),
+             actions: actions,
+           )
+         else
+           SliverAppBar.large(
+-            title: Text(currentLocalizations().appName),
++            title: Text(backstageAppName),
+             actions: actions,
+           ),
+         SliverPadding(
+diff --git a/lib/home_screen.dart b/lib/home_screen.dart
+index cb9eda30687b1830df4d130f11f965b415521b91..4332d6d39f8c2a91ce171f0e636fc36e35fe2ca0 100644
+--- a/lib/home_screen.dart
++++ b/lib/home_screen.dart
+@@ -374,6 +374,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+   String desktopSettingsSection = 'display';
+   StreamSubscription<bool?>? pinResultSubscription;
+   StreamSubscription<void>? shortcutActionSubscription;
++  StreamSubscription<String>? backstagePageSubscription;
+   bool homeInitialized = false;
+   bool shortcutActionPending = false;
+   bool shortcutActionRunning = false;
+@@ -386,6 +387,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+     WidgetsBinding.instance.addPostFrameCallback(
+       (_) => _initializeDeviceProfile(),
+     );
++    backstageInit();
+     _initializeHome();
+     // Android Auto is a separate Activity, so Flutter does not receive a
+     // lifecycle callback when its source/session changes. Poll only the
+@@ -928,6 +930,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+ 
+   @override
+   void dispose() {
++    backstagePageSubscription?.cancel();
+     sessionStateTimer?.cancel();
+     pinResultSubscription?.cancel();
+     shortcutActionSubscription?.cancel();
+@@ -938,6 +941,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+   @override
+   void didChangeAppLifecycleState(AppLifecycleState state) {
+     if (state == AppLifecycleState.resumed) {
++      backstagePageSelected(page);
+       refresh();
+       _consumeTileAction();
+       _consumeShortcutAction();
+@@ -1354,14 +1358,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+               LayoutBuilder(
+                 builder: (context, constraints) => NavigationRail(
+                   extended: MediaQuery.sizeOf(context).width >= 1000,
+-                  selectedIndex: page,
+-                  onDestinationSelected: selectPage,
++                  selectedIndex: backstageNavIndex(page),
++                  onDestinationSelected: backstageNavSelect,
+                   leading: Padding(
+                     padding: const EdgeInsets.symmetric(vertical: 20),
+                     child: ClipRRect(
+                       borderRadius: BorderRadius.circular(9),
+                       child: Image.asset(
+-                        'assets/dextop_icon.png',
++                        backstageIconAsset,
+                         width: 36,
+                         height: 36,
+                         fit: BoxFit.cover,
+@@ -1370,10 +1374,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+                   ),
+                   destinations: [
+                     NavigationRailDestination(
+-                      icon: const Icon(Icons.space_dashboard_outlined),
+-                      selectedIcon: const Icon(Icons.space_dashboard_rounded),
++                      icon: const Icon(Icons.home_outlined),
++                      selectedIcon: const Icon(Icons.home_rounded),
+                       label: Text(currentLocalizations().home),
+                     ),
++                    ...backstageRailDestinations(),
+                     NavigationRailDestination(
+                       icon: const PenguinIcon(),
+                       selectedIcon: const PenguinIcon(filled: true),
+@@ -1399,14 +1404,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+     return Scaffold(
+       body: pageContent(),
+       bottomNavigationBar: NavigationBar(
+-        selectedIndex: page,
+-        onDestinationSelected: selectPage,
++        selectedIndex: backstageNavIndex(page),
++        onDestinationSelected: backstageNavSelect,
+         destinations: [
+           NavigationDestination(
+             icon: Icon(Icons.home_outlined),
+             selectedIcon: Icon(Icons.home_rounded),
+             label: currentLocalizations().home,
+           ),
++          ...backstageBarDestinations(),
+           NavigationDestination(
+             icon: const PenguinIcon(),
+             selectedIcon: const PenguinIcon(filled: true),
+@@ -1445,6 +1451,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+   );
+ 
+   void selectPage(int value) {
++    backstagePageSelected(value);
+     setState(() => page = value);
+     AppAnalytics.screen(switch (value) {
+       0 => 'home',
+diff --git a/lib/l10n/app_en.arb b/lib/l10n/app_en.arb
+index 6fdf2419d8a5abbe0a2ea300bd522f4f525e226e..21caf6a79e9f3a68d42b30d6f56fee5eda1a5a93 100644
+--- a/lib/l10n/app_en.arb
++++ b/lib/l10n/app_en.arb
+@@ -42,7 +42,7 @@
+   "deviceInfo": "Device information",
+   "desktopMode": "Desktop mode in use",
+   "accessibilitySettings": "Accessibility settings",
+-  "accessibilityDescription": "Open Dextop service settings",
++  "accessibilityDescription": "Open Backstage service settings",
+   "appInfo": "App information",
+   "appInfoEmbeddedBinder": "Built-in Binder",
+   "appInfoEmbeddedBinderIncluded": "Included in this build",
+@@ -74,7 +74,7 @@
+   "height": "Height",
+   "protectedContent": "Allow protected content to be displayed",
+   "version": "Version 1.0.0",
+-  "setupWelcome": "Welcome to Dextop.",
++  "setupWelcome": "Welcome to Backstage.",
+   "setupTagline": "A perfect desktop environment on your smartphone.",
+   "setupBegin": "Start",
+   "setupPhaseTerms": "Terms of use",
+@@ -152,11 +152,11 @@
+   "uiTwoFingerTap": "Two-finger tap",
+   "ui3FingerTap": "Three-finger tap",
+   "ui4Divisions": "Four-way split",
+-  "uiDextopIsReady": "Dextop is ready",
++  "uiDextopIsReady": "Backstage is ready",
+   "uiDextopStopping": "Finishing Dextop shutdown",
+   "uiStopDextop": "Stop Dextop",
+   "uiDextopCanBeRestarted": "Dextop can be resumed",
+-  "uiOpenDextop": "Open Dextop",
++  "uiOpenDextop": "Open Backstage",
+   "uiCreateADextopSession": "Create a Dextop session",
+   "uiDextopWorkspaceJson": "Dextop workspace JSON",
+   "uiPerformanceDisplayOnDextop": "Show performance overlay in Dextop",
+@@ -655,7 +655,7 @@
+   "nativeKeyboardThemeCloudDescription": "Soft cloud blue keyboard",
+   "nativeKeyboardThemeAmoledDescription": "True-black power-saving keyboard",
+   "nativeKeyboardThemeCustomDescription": "Custom keyboard theme",
+-  "nativeOpenDextopWithYourSavedAppPlacement": "Open Dextop with your saved app placement",
++  "nativeOpenDextopWithYourSavedAppPlacement": "Open Backstage with your saved app placement",
+   "nativeSaveAndApply": "Save and apply",
+   "nativeFailedToSaveUnableToRetrieveRunning": "Failed to save: Unable to retrieve running apps on Dextop.",
+   "nativeFailedToSaveFailedToWriteTo": "Failed to save: Failed to write to device storage.",
+@@ -698,7 +698,7 @@
+       }
+     }
+   },
+-  "appUpdatedMessage": "Dextop has been updated to the latest version.",
++  "appUpdatedMessage": "Backstage has been updated to the latest version.",
+   "androidSwipeImeLabel": "Dextop swipe input",
+   "androidAccessibilityServiceDescription": "Controls the Dextop virtual display, input, and control panel",
+   "androidEmbeddedPairingChannel": "Built-in access setup",
+@@ -1013,7 +1013,7 @@
+   "nativeSteamModeRestart": "Restart",
+   "nativeSteamModeClose": "Close",
+   "uiShortcutAdd": "Add home screen shortcut",
+-  "uiShortcutUnsupported": "This launcher does not support pinned shortcuts. Long-press the Dextop app icon and choose “Start Dextop”.",
++  "uiShortcutUnsupported": "This launcher does not support pinned shortcuts. Long-press the Backstage app icon and choose “Start desktop”.",
+   "uiShortcutFailed": "Could not add the shortcut: $error",
+   "uiShortcutDismissed": "Shortcut not added",
+   "uiShortcutAdded": "Added to the home screen. Tap it to start or stop the Dextop virtual display.",
+@@ -1024,6 +1024,6 @@
+       }
+     }
+   },
+-  "nativeShortcutStartDisplayLong": "Start or stop the Dextop virtual display",
+-  "nativeShortcutStartDisplay": "Start Dextop"
++  "nativeShortcutStartDisplayLong": "Start or stop the Backstage desktop",
++  "nativeShortcutStartDisplay": "Start desktop"
+ }
+diff --git a/lib/l10n/app_localizations_en.dart b/lib/l10n/app_localizations_en.dart
+index e9b5228bd587336f1412ded9fda26e175d4915cb..dcb6c94ee55288889b9a9ec300d80492e44a8348 100644
+--- a/lib/l10n/app_localizations_en.dart
++++ b/lib/l10n/app_localizations_en.dart
+@@ -145,7 +145,7 @@ class AppLocalizationsEn extends AppLocalizations {
+   String get accessibilitySettings => 'Accessibility settings';
+ 
+   @override
+-  String get accessibilityDescription => 'Open Dextop service settings';
++  String get accessibilityDescription => 'Open Backstage service settings';
+ 
+   @override
+   String get appInfo => 'App information';
+@@ -241,7 +241,7 @@ class AppLocalizationsEn extends AppLocalizations {
+   String get version => 'Version 1.0.0';
+ 
+   @override
+-  String get setupWelcome => 'Welcome to Dextop.';
++  String get setupWelcome => 'Welcome to Backstage.';
+ 
+   @override
+   String get setupTagline =>
+@@ -495,7 +495,7 @@ class AppLocalizationsEn extends AppLocalizations {
+   String get ui4Divisions => 'Four-way split';
+ 
+   @override
+-  String get uiDextopIsReady => 'Dextop is ready';
++  String get uiDextopIsReady => 'Backstage is ready';
+ 
+   @override
+   String get uiDextopStopping => 'Finishing Dextop shutdown';
+@@ -507,7 +507,7 @@ class AppLocalizationsEn extends AppLocalizations {
+   String get uiDextopCanBeRestarted => 'Dextop can be resumed';
+ 
+   @override
+-  String get uiOpenDextop => 'Open Dextop';
++  String get uiOpenDextop => 'Open Backstage';
+ 
+   @override
+   String get uiCreateADextopSession => 'Create a Dextop session';
+@@ -2108,7 +2108,7 @@ class AppLocalizationsEn extends AppLocalizations {
+ 
+   @override
+   String get nativeOpenDextopWithYourSavedAppPlacement =>
+-      'Open Dextop with your saved app placement';
++      'Open Backstage with your saved app placement';
+ 
+   @override
+   String get nativeSaveAndApply => 'Save and apply';
+@@ -2231,7 +2231,7 @@ class AppLocalizationsEn extends AppLocalizations {
+ 
+   @override
+   String get appUpdatedMessage =>
+-      'Dextop has been updated to the latest version.';
++      'Backstage has been updated to the latest version.';
+ 
+   @override
+   String get androidSwipeImeLabel => 'Dextop swipe input';
+@@ -3244,7 +3244,7 @@ class AppLocalizationsEn extends AppLocalizations {
+ 
+   @override
+   String get uiShortcutUnsupported =>
+-      'This launcher does not support pinned shortcuts. Long-press the Dextop app icon and choose “Start Dextop”.';
++      'This launcher does not support pinned shortcuts. Long-press the Backstage app icon and choose “Start desktop”.';
+ 
+   @override
+   String uiShortcutFailed(String error) {
+@@ -3260,8 +3260,8 @@ class AppLocalizationsEn extends AppLocalizations {
+ 
+   @override
+   String get nativeShortcutStartDisplayLong =>
+-      'Start or stop the Dextop virtual display';
++      'Start or stop the Backstage desktop';
+ 
+   @override
+-  String get nativeShortcutStartDisplay => 'Start Dextop';
++  String get nativeShortcutStartDisplay => 'Start desktop';
+ }
+diff --git a/lib/main.dart b/lib/main.dart
+index c0a8bf531e652ffb15cf26e3e7a783e697be982b..2fcdf0dbb13b5dadf413b05b1ef829a717fc5a77 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -29,6 +29,7 @@ part 'overlay_entry.dart';
+ part 'app_shell.dart';
+ part 'home_screen.dart';
+ part 'home_content.dart';
++part 'backstage_shell.dart';
+ part 'resolution_ui.dart';
+ part 'settings_screen.dart';
+ part 'display_topology.dart';
+diff --git a/lib/settings_screen.dart b/lib/settings_screen.dart
+index e17e3c3e5087d75707aed105e1acbddb1d58f86f..4e0b1a77e884fa73f2212de68c18173b747d2f56 100644
+--- a/lib/settings_screen.dart
++++ b/lib/settings_screen.dart
+@@ -12,6 +12,7 @@ extension _SettingsContent on _HomeScreenState {
+           padding: EdgeInsets.fromLTRB(16, 0, 16, 32),
+           sliver: SliverList.list(
+             children: [
++              if (backstageAiTab) backstageAiSettingsTile(),
+               sectionTitle(l.theme),
+               SizedBox(height: 12),
+               rootMyGalaxyThemeSwitch(l),
+@@ -223,6 +224,7 @@ extension _SettingsContent on _HomeScreenState {
+                         style: Theme.of(context).textTheme.headlineMedium,
+                       ),
+                     ),
++                    if (backstageAiTab) backstageAiSettingsTile(),
+                     Expanded(
+                       child: ListView.builder(
+                         padding: const EdgeInsets.symmetric(horizontal: 12),
+diff --git a/lib/setup_page.dart b/lib/setup_page.dart
+index 4d898050eb1e9bd28e6f80c4f9e3d360d9980908..ea1e78b0dedbbeabe6abceec80855fd220380aac 100644
+--- a/lib/setup_page.dart
++++ b/lib/setup_page.dart
+@@ -362,7 +362,7 @@ class _DextopSetupPageState extends State<DextopSetupPage>
+           ClipRRect(
+             borderRadius: BorderRadius.circular(30),
+             child: const Image(
+-              image: AssetImage('assets/dextop_icon.png'),
++              image: AssetImage('assets/backstage_icon.png'),
+               width: 120,
+               height: 120,
+             ),
+diff --git a/pubspec.yaml b/pubspec.yaml
+index b46f1771934de727e239c4bdeae6cfe90e694ab1..05b6463a8b71ee7aeff1b8ac634ae611ceb6ad54 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -35,5 +35,5 @@ flutter:
+   generate: true
+   uses-material-design: true
+   assets:
+-    - assets/dextop_icon.png
++    - assets/backstage_icon.png
+     - assets/setup_tutorial/
+diff --git a/test/backstage_shell_test.dart b/test/backstage_shell_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..ddf339741cd10eaab4abf04fc2959a9425f381d2
+--- /dev/null
++++ b/test/backstage_shell_test.dart
+@@ -0,0 +1,448 @@
++import 'package:flutter/material.dart';
++import 'package:flutter/services.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:free_dextop/main.dart';
++import 'package:shared_preferences/shared_preferences.dart';
++
++// Backstage (patch 0005-backstage-shell): the Agent destination and the live desktop player on Home.
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++
++  const display = MethodChannel('app.freedextop/display');
++  const shell = MethodChannel('com.eggman.backstage/shell');
++  final messenger =
++      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
++  late List<MethodCall> shellCalls;
++  late Map<String, Object?> shellState;
++  String? coldPage;
++  var automaticSucceeds = true;
++  var previewOwned = false;
++
++  setUp(() {
++    shellCalls = [];
++    coldPage = null;
++    automaticSucceeds = true;
++    previewOwned = false;
++    shellState = {
++      'playerAllowed': true,
++      'running': false,
++      'presentation': 'none',
++      'width': 0,
++      'height': 0,
++      'privileged': true,
++      'textureId': null,
++    };
++    SharedPreferences.setMockInitialValues({'setup_completed': true});
++    messenger.setMockMethodCallHandler(display, (call) async {
++      if (call.method == 'status') {
++        return {
++          'active': false,
++          'privileged': true,
++          'shizukuInstalled': true,
++          'shizukuRunning': true,
++          'shizukuGranted': true,
++        };
++      }
++      return null;
++    });
++    messenger.setMockMethodCallHandler(shell, (call) async {
++      shellCalls.add(call);
++      switch (call.method) {
++        case 'takeShellPage':
++          final page = coldPage;
++          coldPage = null;
++          return page;
++        case 'previewShow':
++          if (automaticSucceeds && shellState['presentation'] == 'hidden') {
++            previewOwned = true;
++            shellState = {...shellState, 'presentation': 'in_app'};
++            return true;
++          }
++          return false;
++        case 'previewRestore':
++          if (previewOwned && shellState['presentation'] == 'in_app') {
++            shellState = {...shellState, 'presentation': 'hidden'};
++          }
++          previewOwned = false;
++          return true;
++        case 'present':
++          previewOwned = false;
++          shellState = {
++            ...shellState,
++            'presentation': (call.arguments as Map)['presentation'],
++          };
++          return true;
++        case 'state':
++          return shellState;
++        case 'playerAttach':
++          return {'textureId': 7, 'width': 1920, 'height': 1080};
++      }
++      return true;
++    });
++  });
++
++  tearDown(() {
++    messenger.setMockMethodCallHandler(display, null);
++    messenger.setMockMethodCallHandler(shell, null);
++  });
++
++  Future<void> settle(WidgetTester tester) async {
++    for (var frame = 0; frame < 12; frame++) {
++      await tester.pump(const Duration(milliseconds: 50));
++    }
++  }
++
++  testWidgets('Home is Backstage with an Agent destination second', (
++    tester,
++  ) async {
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    expect(find.text('Backstage'), findsWidgets);
++    final bar = tester.widget<NavigationBar>(find.byType(NavigationBar));
++    expect(bar.destinations.length, 4);
++    expect((bar.destinations[1] as NavigationDestination).label, 'Agent');
++    expect(bar.selectedIndex, 0);
++
++    // Agent opens the agent screen; the page stays Home.
++    await tester.tap(find.text('Agent'));
++    await settle(tester);
++    expect(shellCalls.where((c) => c.method == 'openAgent'), isNotEmpty);
++    expect(
++      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
++      0,
++    );
++
++    // Dextop's own pages keep their order after it: Linux, then Settings.
++    await tester.tap(find.byIcon(Icons.tune_outlined));
++    await settle(tester);
++    expect(
++      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
++      3,
++    );
++    await tester.pumpWidget(const SizedBox());
++  });
++
++  testWidgets('without a desktop Home offers Start (in the app)', (
++    tester,
++  ) async {
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    expect(find.byKey(const ValueKey('backstage-live-player')), findsOneWidget);
++    await tester.tap(find.byKey(const ValueKey('backstage-start-desktop')));
++    await settle(tester);
++    expect(shellCalls.where((c) => c.method == 'start'), isNotEmpty);
++    await tester.pumpWidget(const SizedBox());
++  });
++
++  testWidgets('a running desktop plays in Home and takes touches', (
++    tester,
++  ) async {
++    shellState = {
++      ...shellState,
++      'running': true,
++      'presentation': 'in_app',
++      'width': 1920,
++      'height': 1080,
++    };
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    expect(shellCalls.where((c) => c.method == 'playerAttach'), isNotEmpty);
++    expect(find.byType(Texture), findsOneWidget);
++    for (final label in ['Full screen', 'Pop out', 'Background', 'Stop']) {
++      expect(find.text(label), findsWidgets, reason: label);
++    }
++    await tester.tap(find.byType(Texture));
++    await settle(tester);
++    final touches = shellCalls.where((c) => c.method == 'touch').toList();
++    expect(
++      touches.map((c) => (c.arguments as Map)['action']),
++      containsAllInOrder([0, 2]),
++    );
++    await tester.ensureVisible(find.text('Pop out'));
++    await tester.pump();
++    await tester.tap(find.text('Pop out'));
++    await settle(tester);
++    expect(
++      shellCalls
++          .where((c) => c.method == 'present')
++          .map((c) => (c.arguments as Map)['presentation']),
++      contains('mini'),
++    );
++    await tester.pumpWidget(const SizedBox());
++  });
++
++  test('automatic preview only borrows hidden while visible', () {
++    expect(
++      backstagePreviewAction('hidden', true, false),
++      BackstagePreviewAction.show,
++    );
++    expect(
++      backstagePreviewAction('hidden', false, false),
++      BackstagePreviewAction.none,
++    );
++    expect(
++      backstagePreviewAction('in_app', false, true),
++      BackstagePreviewAction.restore,
++    );
++    expect(
++      backstagePreviewAction('in_app', true, true),
++      BackstagePreviewAction.none,
++    );
++    for (final mode in ['mini', 'full', 'none']) {
++      expect(
++        backstagePreviewAction(mode, true, false),
++        BackstagePreviewAction.none,
++      );
++      expect(
++        backstagePreviewAction(mode, false, true),
++        BackstagePreviewAction.none,
++      );
++    }
++  });
++
++  testWidgets(
++    'incoming shell page selects Linux and Settings without reopening Agent',
++    (tester) async {
++      await tester.pumpWidget(const DextopApp());
++      await settle(tester);
++      for (final entry in {'linux': 2, 'settings': 3, 'home': 0}.entries) {
++        await messenger.handlePlatformMessage(
++          shell.name,
++          const StandardMethodCodec().encodeMethodCall(
++            MethodCall('selectPage', entry.key),
++          ),
++          (_) {},
++        );
++        await settle(tester);
++        expect(
++          tester
++              .widget<NavigationBar>(find.byType(NavigationBar))
++              .selectedIndex,
++          entry.value,
++        );
++      }
++      await messenger.handlePlatformMessage(
++        shell.name,
++        const StandardMethodCodec().encodeMethodCall(
++          const MethodCall('selectPage', 'ai'),
++        ),
++        (_) {},
++      );
++      await settle(tester);
++      expect(
++        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
++        0,
++      );
++      expect(shellCalls.where((c) => c.method == 'openAgent'), isEmpty);
++      await tester.pumpWidget(const SizedBox());
++    },
++  );
++
++  testWidgets('cold page survives until Home subscribes', (tester) async {
++    coldPage = 'settings';
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    expect(
++      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
++      3,
++    );
++    expect(find.text('Agent settings'), findsOneWidget);
++    await tester.tap(find.text('Agent settings'));
++    await settle(tester);
++    expect(
++      (shellCalls.lastWhere((c) => c.method == 'openAgent').arguments
++          as Map)['screen'],
++      'settings',
++    );
++    await tester.pumpWidget(const SizedBox());
++  });
++
++  testWidgets('hidden auto-previews and restores when Linux or Agent opens', (
++    tester,
++  ) async {
++    shellState = {
++      ...shellState,
++      'running': true,
++      'presentation': 'hidden',
++      'width': 1920,
++      'height': 1080,
++    };
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    expect(shellState['presentation'], 'in_app');
++    expect(find.byType(Texture), findsOneWidget);
++    await messenger.handlePlatformMessage(
++      shell.name,
++      const StandardMethodCodec().encodeMethodCall(
++        const MethodCall('selectPage', 'linux'),
++      ),
++      (_) {},
++    );
++    await settle(tester);
++    expect(shellState['presentation'], 'hidden');
++    await messenger.handlePlatformMessage(
++      shell.name,
++      const StandardMethodCodec().encodeMethodCall(
++        const MethodCall('selectPage', 'home'),
++      ),
++      (_) {},
++    );
++    await settle(tester);
++    expect(shellState['presentation'], 'in_app');
++    await tester.tap(find.text('Agent'));
++    await settle(tester);
++    expect(shellState['presentation'], 'hidden');
++    expect(shellCalls.where((c) => c.method == 'present'), isEmpty);
++    await tester.pumpWidget(const SizedBox());
++  });
++
++  testWidgets('auto-preview restores on pause and reappears on return', (
++    tester,
++  ) async {
++    shellState = {
++      ...shellState,
++      'running': true,
++      'presentation': 'hidden',
++      'width': 1920,
++      'height': 1080,
++    };
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    expect(shellState['presentation'], 'in_app');
++    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
++    await settle(tester);
++    expect(shellState['presentation'], 'hidden');
++    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
++    await settle(tester);
++    expect(shellState['presentation'], 'in_app');
++    await tester.ensureVisible(find.text('Pop out'));
++    await tester.pump();
++    await tester.tap(find.text('Pop out'));
++    await settle(tester);
++    expect(
++      shellState['presentation'],
++      'mini',
++      reason: shellCalls.map((c) => '${c.method}:${c.arguments}').join(', '),
++    );
++    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
++    await settle(tester);
++    expect(
++      shellState['presentation'],
++      'mini',
++      reason: shellCalls.map((c) => '${c.method}:${c.arguments}').join(', '),
++    );
++    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
++    await tester.pumpWidget(const SizedBox());
++  });
++
++  testWidgets('failure is debounced and keeps manual button', (tester) async {
++    automaticSucceeds = false;
++    shellState = {
++      ...shellState,
++      'running': true,
++      'presentation': 'hidden',
++      'width': 1920,
++      'height': 1080,
++    };
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    await tester.pump(const Duration(seconds: 6));
++    await settle(tester);
++    expect(shellCalls.where((c) => c.method == 'previewShow').length, 1);
++    expect(
++      find.text('Running in the background. Show it here'),
++      findsOneWidget,
++    );
++    await tester.tap(find.text('Running in the background. Show it here'));
++    await settle(tester);
++    expect(shellState['presentation'], 'in_app');
++    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
++    await settle(tester);
++    expect(shellState['presentation'], 'in_app');
++    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
++    await tester.pumpWidget(const SizedBox());
++  });
++
++  testWidgets('MINI and FULL keep their explicit show button', (tester) async {
++    for (final presentation in ['mini', 'full']) {
++      shellCalls.clear();
++      shellState = {
++        ...shellState,
++        'running': true,
++        'presentation': presentation,
++        'width': 1920,
++        'height': 1080,
++      };
++      await tester.pumpWidget(const DextopApp());
++      await settle(tester);
++      expect(shellCalls.where((c) => c.method == 'previewShow'), isEmpty);
++      expect(find.byType(Texture), findsNothing);
++      expect(
++        find.text(
++          presentation == 'mini'
++              ? 'Playing in the popup. Show it here'
++              : 'Showing full screen. Show it here',
++        ),
++        findsOneWidget,
++      );
++      await tester.pumpWidget(const SizedBox());
++      await tester.pump();
++    }
++  });
++
++  testWidgets(
++    'wide shell keeps the same four destinations and accepts page delivery',
++    (tester) async {
++      tester.view.physicalSize = const Size(1000, 900);
++      tester.view.devicePixelRatio = 1;
++      addTearDown(tester.view.resetPhysicalSize);
++      addTearDown(tester.view.resetDevicePixelRatio);
++      await tester.pumpWidget(const DextopApp());
++      await settle(tester);
++      final rail = tester.widget<NavigationRail>(find.byType(NavigationRail));
++      expect(rail.destinations.map((d) => (d.label as Text).data).toList(), [
++        'Home',
++        'Agent',
++        'Linux',
++        'Settings',
++      ]);
++      await messenger.handlePlatformMessage(
++        shell.name,
++        const StandardMethodCodec().encodeMethodCall(
++          const MethodCall('selectPage', 'settings'),
++        ),
++        (_) {},
++      );
++      await settle(tester);
++      expect(
++        tester
++            .widget<NavigationRail>(find.byType(NavigationRail))
++            .selectedIndex,
++        3,
++      );
++      expect(find.text('Agent settings'), findsOneWidget);
++      await tester.pumpWidget(const SizedBox());
++    },
++  );
++
++  test('player points map to desktop pixels, clamped', () {
++    expect(
++      backstagePlayerToDesktop(
++        const Offset(50, 25),
++        const Size(100, 50),
++        1920,
++        1080,
++      ),
++      const Offset(960, 540),
++    );
++    expect(
++      backstagePlayerToDesktop(
++        const Offset(150, -5),
++        const Size(100, 50),
++        1920,
++        1080,
++      ),
++      const Offset(1919, 0),
++    );
++  });
++}
+diff --git a/test/control_screen_test.dart b/test/control_screen_test.dart
+index 09e77211b990fe0e92f776d4a9a1a7a174bfbb92..d98dff1a3d206289ae0036457d01b3765afef2b7 100644
+--- a/test/control_screen_test.dart
++++ b/test/control_screen_test.dart
+@@ -36,8 +36,8 @@ void main() {
+     for (var frame = 0; frame < 12; frame++) {
+       await tester.pump(const Duration(milliseconds: 50));
+     }
+-    expect(find.text('Dextop'), findsWidgets);
+-    expect(find.text('Dextop is ready'), findsOneWidget);
++    expect(find.text('Backstage'), findsWidgets);
++    expect(find.text('Backstage is ready'), findsOneWidget);
+     expect(find.text('Start'), findsOneWidget);
+     expect(find.textContaining('Shizuku'), findsNothing);
+   });

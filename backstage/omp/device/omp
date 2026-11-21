@@ -1,0 +1,283 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+set +x
+umask 077
+broker=$HOME/.config/backstage-omp/broker
+config=$HOME/.omp/agent
+mkdir -p "$config"
+wrapper_script=${BASH_SOURCE[0]:-}
+[[ -z $wrapper_script || $wrapper_script == /* ]] || wrapper_script=$PWD/$wrapper_script
+
+backstage_read_broker() {
+    port= token=
+    [[ -r $broker ]] || return 1
+    while IFS='=' read -r name value; do case "$name" in port) port=$value;; token) token=$value;; esac; done < "$broker"
+    [[ $port =~ ^[0-9]{1,5}$ && $token =~ ^[A-Za-z0-9_-]{43}$ ]]
+}
+
+# BEGIN BACKSTAGE SKILLS SYNC
+# ZIP entries are skills/<name>/...; extraction is staged under an agent directory first.
+backstage_sync_skills() (
+    local agent=$HOME/.omp/agent stage d target empty=0 changing=0 committed=0 name hash applied
+    [[ ! -L $agent/skills ]] || return 1
+    mkdir -p "$agent/skills" || return 1
+    # flock ships in the pinned Termux bootstrap. Keep the inode: the kernel drops the lock on exit/crash.
+    exec 9>>"$agent/.skills-sync.lock" || return 1
+    flock -x -w 10 9 || return 1
+    stage=$(mktemp -d "$agent/.backstage-skills.XXXXXX") || return 1
+    shopt -s nullglob dotglob
+    backstage_skills_cleanup() {
+        local status=$? rollback_failed=0 saved
+        trap - EXIT
+        if (( changing && ! committed )); then
+            # Only paths recorded before our install moves may be removed during rollback.
+            while IFS= read -r name; do
+                target=$agent/skills/$name
+                if [[ -d $target && ! -L $target && -f $target/.backstage ]]; then
+                    rm -rf -- "$target" || rollback_failed=1
+                fi
+            done < "$stage/installed"
+            for saved in "$stage/backup"/*; do
+                target=$agent/skills/${saved##*/}
+                if [[ -e $target || -L $target ]] || ! mv -T -- "$saved" "$target"; then rollback_failed=1; fi
+            done
+        fi
+        if (( rollback_failed )); then
+            echo "Backstage omp skills: rollback incomplete; backups retained at $stage/backup" >&2
+        else
+            rm -rf -- "$stage"
+        fi
+        return "$status"
+    }
+    trap backstage_skills_cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    printf 'header = "Authorization: Bearer %s"\n' "$token" |
+        curl -q --noproxy '*' --config - -fsS --connect-timeout 1 --max-time 60 --max-filesize 2000000000 \
+        "http://127.0.0.1:$port/omp/v1/config/skills.zip" > "$stage/skills.zip" 2>/dev/null || return 1
+    [[ $(wc -c < "$stage/skills.zip") -le 2000000000 ]] || return 1
+    hash=$(sha256sum "$stage/skills.zip") || return 1
+    hash=${hash%% *}
+    applied=
+    [[ ! -r $agent/.skills-backstage.sha256 ]] || read -r applied < "$agent/.skills-backstage.sha256" || true
+    [[ $hash != "$applied" ]] || return 0
+    # Some unzip builds reject a valid empty ZIP. Recognize only its exact 22-byte encoding.
+    { printf 'PK\005\006'; printf '\0%.0s' {1..18}; } > "$stage/empty.zip"
+    if cmp -s "$stage/skills.zip" "$stage/empty.zip"; then
+        empty=1
+    else
+        LC_ALL=C unzip -l "$stage/skills.zip" > "$stage/list" 2>/dev/null || return 1
+        # Bound files, path depth and DISTINCT implied directories before extraction, using portable unzip -l.
+        awk '
+            $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9-]+$/ && $3 ~ /^[0-9:]+$/ {
+                size = $1; path = $0
+                sub(/^[[:space:]]*[0-9]+[[:space:]]+[0-9-]+[[:space:]]+[0-9:]+[[:space:]]+/, "", path)
+                n = split(path, parts, "/")
+                if (n < 3 || n > 12 || parts[1] != "skills" || length(parts[2]) < 1 || length(parts[2]) > 64 ||
+                    parts[2] !~ /^[a-z0-9._-]+$/ || path ~ /[[:cntrl:]\\]/) exit 1
+                prefix = ""
+                for (i = 1; i <= n; i++) {
+                    if (parts[i] == ".." || parts[i] == "." || parts[i] == "") exit 1
+                    prefix = prefix (i > 1 ? "/" : "") parts[i]
+                    if (i < n && !(prefix in directories)) {
+                        directories[prefix] = 1
+                        if (++directory_count > 20000000) exit 1
+                    }
+                }
+                if (!(parts[2] in skill_entries) && ++skill_count > 5000) exit 1
+                if (++skill_entries[parts[2]] > 20001) exit 1
+                bytes += size; count++
+            }
+            END { if (bytes > 2000000000 || count > 2000000 || count == 0) exit 1 }
+        ' "$stage/list" || return 1
+        mkdir "$stage/unpacked" || return 1
+        unzip -o -q "$stage/skills.zip" -d "$stage/unpacked" >/dev/null 2>&1 || return 1
+        [[ -z $(find "$stage/unpacked" -type l -print) ]] || return 1
+    fi
+    if (( ! empty )); then
+        for d in "$stage/unpacked/skills"/*; do
+            [[ -d $d && -f $d/.backstage && ! -s $d/.backstage && -f $d/SKILL.md ]] || return 1
+        done
+    fi
+    mkdir "$stage/backup" || return 1
+    : > "$stage/installed" || return 1
+    changing=1
+    # Move the old managed set aside; the EXIT trap restores it if any later move fails.
+    for d in "$agent/skills"/*; do
+        if [[ -d $d && ! -L $d && -f $d/.backstage ]]; then
+            mv -T -- "$d" "$stage/backup/${d##*/}" || return 1
+        fi
+    done
+    if (( ! empty )); then
+        for d in "$stage/unpacked/skills"/*; do
+            target=$agent/skills/${d##*/}
+            if [[ -e $target || -L $target ]]; then
+                echo "Backstage omp skills: keeping user skill ${d##*/}" >&2
+            else
+                printf '%s\n' "${d##*/}" >> "$stage/installed" || return 1
+                mv -T -- "$d" "$target" || return 1
+            fi
+        done
+    fi
+    committed=1
+    printf '%s\n' "$hash" > "$stage/applied.sha256" || return 1
+    mv -f -- "$stage/applied.sha256" "$agent/.skills-backstage.sha256" || return 1
+)
+# END BACKSTAGE SKILLS SYNC
+
+backstage_refresh() (
+    local port token name value file local_name tmp= hash current failed=0
+    # Initial wrapper fetches and the long-lived poller share this lock, so an older fetch cannot overwrite a newer one.
+    exec 7>>"$config/.backstage-sync.lock" || return 1
+    flock -x -w 2 7 || return 1
+    backstage_read_broker || return 0
+    trap '[[ -z $tmp ]] || rm -f -- "$tmp"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    # models before overlay; omp's own config.yml is never touched.
+    for file in models.yml config.yml mcp.json instructions.txt; do
+        local_name=$file; [[ $file == config.yml ]] && local_name=backstage.yml
+        tmp=$(mktemp "$config/.backstage-config.XXXXXX") || return 1
+        if printf 'header = "Authorization: Bearer %s"\n' "$token" |
+            curl -q --noproxy '*' --config - -fsS --connect-timeout 1 --max-time 1 \
+            "http://127.0.0.1:$port/omp/v1/config/$file" > "$tmp" 2>/dev/null && [[ -s $tmp ]]; then
+            hash=$(sha256sum "$tmp"); hash=${hash%% *}
+            current=
+            if [[ -f $config/$local_name ]]; then current=$(sha256sum "$config/$local_name"); current=${current%% *}; fi
+            if [[ $hash != "$current" ]]; then mv -f -- "$tmp" "$config/$local_name" || return 1; fi
+        else
+            failed=1
+        fi
+        rm -f -- "$tmp"; tmp=
+    done
+    if (( failed )); then echo 'Open Backstage to refresh omp configuration; using cached config' >&2; fi
+    if ! backstage_sync_skills; then
+        echo 'Open Backstage to refresh omp skills; keeping cached skills' >&2
+    fi
+)
+
+# /proc start time survives exec; rejecting zombies and PID reuse prevents a detached poller living forever.
+backstage_identity() {
+    local line rest
+    local -a fields
+    [[ $1 =~ ^[0-9]+$ ]] && IFS= read -r line < "/proc/$1/stat" || return 1
+    rest=${line##*) }
+    read -r -a fields <<< "$rest"
+    [[ ${fields[0]:-Z} != Z && ${fields[0]:-X} != X && ${fields[19]:-} =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "${fields[19]}"
+}
+backstage_register() (
+    local stamp
+    stamp=$(backstage_identity "$$") || return 1
+    mkdir -p "$config/.backstage-sync-clients" || return 1
+    exec 6>>"$config/.backstage-clients.lock" || return 1
+    flock -x -w 2 6 || return 1
+    : > "$config/.backstage-sync-clients/$$.$stamp"
+)
+backstage_have_clients() (
+    local client pid stamp current any=1
+    exec 6>>"$config/.backstage-clients.lock" || return 1
+    flock -x -w 2 6 || return 0 # A busy registry is not evidence that every session has exited.
+    for client in "$config/.backstage-sync-clients/"*; do
+        [[ -f $client ]] || continue
+        stamp=${client##*/}; pid=${stamp%%.*}; stamp=${stamp#*.}
+        current=$(backstage_identity "$pid") || current=
+        if [[ -n $current && $current == "$stamp" ]]; then any=0
+        else rm -f -- "$client" 8>&-; fi
+    done
+    # Release the role lock BEFORE releasing the registry lock. A concurrently registering wrapper can
+    # then start the successor; it cannot miss a poller that is about to exit.
+    if (( any )); then flock -u 8; fi
+    return "$any"
+)
+backstage_poll() {
+    local sleeper= updater=
+    backstage_poll_cleanup() {
+        [[ -z ${sleeper:-} ]] || kill "$sleeper" 2>/dev/null || true
+        [[ -z ${updater:-} ]] || kill -TERM -- "-$updater" 2>/dev/null || true
+    }
+    exec 8>>"$config/.backstage-poller.lock" || return 0
+    flock -n 8 || return 0 # Exactly one active poller, including nested/re-entered omp sessions.
+    trap backstage_poll_cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    while backstage_have_clients; do
+        # Do not let curl, unzip, or sleep inherit the singleton lock after a poller crash.
+        setsid bash "$wrapper_script" --backstage-sync-once 8>&- </dev/null >/dev/null 2>&1 & updater=$!
+        # A bounded download can still take 60 s. Watch its process group so an exited session does not
+        # leave a download/extraction alive; TERM runs the existing staging/rollback traps.
+        while kill -0 "$updater" 2>/dev/null; do
+            if ! backstage_have_clients; then
+                backstage_poll_cleanup
+                wait "$updater" 2>/dev/null || true
+                updater=
+                return 0
+            fi
+            sleep 1 8>&- & sleeper=$!
+            wait "$sleeper" || true
+            sleeper=
+        done
+        wait "$updater" 2>/dev/null || true
+        updater=
+        sleep 8 8>&- & sleeper=$!
+        wait "$sleeper" || true
+        sleeper=
+    done
+}
+if [[ ${1:-} == --backstage-sync-once ]]; then
+    backstage_refresh || true
+    exit 0
+fi
+if [[ ${1:-} == --backstage-sync-poll ]]; then
+    backstage_poll
+    exit 0
+fi
+backstage_refresh || true
+# omp treats a missing overlay as an error: add it only when present.
+if [[ -s $config/backstage.yml ]]; then export PI_CONFIG_FILES="$config/backstage.yml${PI_CONFIG_FILES:+:$PI_CONFIG_FILES}"; fi
+# Teach omp how this Android environment works and how to reach shell-user powers and drive the phone.
+# Carried on every wrapper-launched session (Termux, omp_subagent, the main-chat RPC engine) and its task
+# subagents via the launch-time footer. A launch-only flag: omp ignores it for subcommands. Contains no secret.
+note="Environment and privileges (omp on Android, inside Backstage/OMP or Termux):
+- You are omp running on an Android phone as an UNPRIVILEGED app user (uid about 10xxx) in a Termux userland. su, root, rish and adb are NOT available to you and will fail with permission denied. Do not attempt su, rish or adb pairing.
+- To act with Android shell powers (uid 2000, the identity that adb shell has), run ONE command through the helper on your PATH: backstage-sh COMMAND  (quote COMMAND if it has spaces, e.g. backstage-sh pm list packages). It relays the command through the Backstage app over loopback and runs it as the shell user, then returns its output and exit code. Backstage must be running with Shizuku or Stellar granted; each command may require the phone owner to approve it; a time limit and an output cap are enforced.
+
+Driving the phone and apps with backstage-sh (adb-shell equivalents):
+- Apps: backstage-sh pm list packages ; backstage-sh pm path PACKAGE ; backstage-sh pm install /sdcard/Download/app.apk ; backstage-sh pm uninstall PACKAGE
+- Launch/stop/open: backstage-sh am start -n PACKAGE/.MainActivity ; backstage-sh am force-stop PACKAGE ; backstage-sh am start -a android.intent.action.VIEW -d https://example.com
+- Touch/type/keys: backstage-sh input tap X Y ; backstage-sh input swipe X1 Y1 X2 Y2 300 ; backstage-sh input text hello ; backstage-sh input keyevent KEYCODE_BACK (also HOME, ENTER, 26=power)
+- See the screen: backstage-sh screencap -p /sdcard/shot.png  then read /sdcard/shot.png ; UI layout: backstage-sh uiautomator dump /sdcard/ui.xml  then read /sdcard/ui.xml
+- State/settings: backstage-sh dumpsys activity top ; backstage-sh settings get system screen_brightness ; backstage-sh settings put system screen_brightness 128
+- Logs: backstage-sh logcat -d -t 200
+
+Rules:
+- You CANNOT enable or disable accessibility services through settings; those writes are refused by design. Ask the phone owner to change accessibility in Android Settings if a task needs it.
+- /sdcard is readable and writable directly; other apps private data and /data need backstage-sh.
+- Prefer ordinary in-sandbox commands; use backstage-sh only when a task genuinely needs shell-user privileges or must drive the phone.
+- Destructive or outward actions (uninstalling, force-stop, settings changes, input that sends messages or makes purchases) are real and will prompt the owner for approval; keep each backstage-sh command minimal and say what it does."
+rpc=0
+session=1
+# Stop at --: a user prompt containing --mode rpc is data, not an option.
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+    [[ ${args[i]} != -- ]] || break
+    case ${args[i]} in --version|-v|--help|-h) session=0;; esac
+    if [[ ${args[i]} == --mode=rpc || ( ${args[i]} == --mode && ${args[i+1]:-} == rpc ) ]]; then rpc=1; fi
+done
+if (( ! rpc && session )) && [[ -f $wrapper_script ]] && backstage_register; then
+    # Detached from terminal signals and captured pipes. Only the script path is passed, never a token.
+    # Every launch registers its exec PID; the single poller exits when the last live session goes away.
+    setsid bash "$wrapper_script" --backstage-sync-poll </dev/null >/dev/null 2>&1 &
+fi
+# Global instructions follow the always-on device guide — but only for non-RPC sessions (Termux, omp_subagent);
+# the main-chat engine (--mode rpc) already carries them in its Backstage preamble, so appending here would double them.
+if (( ! rpc )) && [[ -s $config/instructions.txt ]]; then note+=$'\n\n'"$(< "$config/instructions.txt")"; fi
+# Pass the prompt as a FILE path, never as one giant argv string: avoids "argument list too long" and keeps the
+# text (which the user may have pasted, possibly with a secret) out of the child process argv and any logs.
+promptfile=$config/.backstage-prompt
+( umask 077; printf '%s' "$note" > "$promptfile.tmp" && mv "$promptfile.tmp" "$promptfile" ) || promptfile=
+if [[ -n $promptfile ]]; then
+    exec "$HOME/.bun/bin/bun" "$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js" --append-system-prompt "$promptfile" "$@"
+else
+    exec "$HOME/.bun/bin/bun" "$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js" "$@"
+fi
