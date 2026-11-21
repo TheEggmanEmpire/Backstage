@@ -193,11 +193,6 @@ jobs:
           ls dist/backstage-"$tag"-arm64-v8a-release.apk > /dev/null 2>&1 ||
             echo "::warning::No dist/backstage-${tag}-arm64-v8a-release.apk: the backstage version in backstage/dextop-integration.gradle does not match tag $GITHUB_REF_NAME"
 
-      # GPL-3.0 §6 / LGPL-2.1 §6: the prebuilt third-party binaries in the APK have their source only on third-party
-      # servers, so each release carries a copy (licenses/third-party-sources.tsv). A missing or altered archive fails.
-      - name: Mirror the sources of the prebuilt third-party binaries
-        run: scripts/fetch-third-party-sources.sh "$RUNNER_TEMP/sources"
-
       - name: Release notes (changelog + source code)
         run: |
           # The "## <version>" section of CHANGELOG.md (up to the next "## " heading) opens the release notes.
@@ -220,10 +215,8 @@ jobs:
             echo "repository at tag \`$GITHUB_REF_NAME\` (commit \`$GITHUB_SHA\`): the \"Source code\" archives of this release."
             echo "The APK names that commit in \`assets/backstage/THIRD_PARTY_NOTICES.txt\`."
             echo
-            echo "Prebuilt third-party binaries inside the APK are redistributed unchanged; their sources are attached here"
-            echo "(\`SOURCES-SHA256SUMS\` lists them, NOTICE.md says which binary each one covers):"
-            echo
-            grep -v '^#' licenses/third-party-sources.tsv | awk -F '\t' 'NF >= 4 { printf "- `%s`: %s\n", $1, $4 }'
+            echo "Prebuilt third-party binaries inside the APK are redistributed unchanged; NOTICE.md and"
+            echo "\`licenses/third-party-sources.tsv\` name each one and where its source is published."
             echo
             echo "The APK also contains closed-source Google SDKs inherited from upstream Dextop (see NOTICE.md)."
           } > "$RUNNER_TEMP/release-notes.md"
@@ -234,7 +227,6 @@ jobs:
           files: |
             dist/*.apk
             dist/SHA256SUMS
-            ${{ runner.temp }}/sources/*
           body_path: ${{ runner.temp }}/release-notes.md
           prerelease: ${{ inputs.prerelease || false }}
           generate_release_notes: true

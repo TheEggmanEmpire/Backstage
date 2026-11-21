@@ -119,17 +119,15 @@ class ReleaseSourcesTest(unittest.TestCase):
                                       capture_output=True, text=True)
             self.assertIn("::warning::", mismatch.stdout)
 
-    def test_release_mirrors_and_attaches_third_party_sources(self):
+    def test_release_attaches_only_the_apk_and_its_hash(self):
         steps = load(os.path.join(WORKFLOWS, "build.yml"))["jobs"]["release"]["steps"]
         runs = [str(s.get("run", "")) for s in steps]
-        fetch = next(i for i, r in enumerate(runs) if "scripts/fetch-third-party-sources.sh" in r)
-        publish = next(i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("softprops/action-gh-release"))
-        self.assertLess(fetch, publish, "sources are fetched before the release is published")
-        self.assertIn("$RUNNER_TEMP/sources", runs[fetch])
-        files = steps[publish]["with"]["files"]
-        self.assertIn("runner.temp }}/sources/*", files)
-        self.assertTrue(steps[publish]["with"]["fail_on_unmatched_files"])
-        self.assertIn("release-notes.md", steps[publish]["with"]["body_path"])
+        self.assertFalse(any("fetch-third-party-sources.sh" in r for r in runs), "no source archives in releases")
+        publish = next(s for s in steps if str(s.get("uses", "")).startswith("softprops/action-gh-release"))
+        files = [f.strip() for f in publish["with"]["files"].splitlines() if f.strip()]
+        self.assertEqual(["dist/*.apk", "dist/SHA256SUMS"], files)
+        self.assertTrue(publish["with"]["fail_on_unmatched_files"])
+        self.assertIn("release-notes.md", publish["with"]["body_path"])
 
 
 @unittest.skipIf(yaml is None, "PyYAML not installed")
