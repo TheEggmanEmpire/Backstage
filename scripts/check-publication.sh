@@ -23,7 +23,7 @@ for entry in git('ls-files', '--stage', '-z').split(b'\0'):
         entries.append((os.fsdecode(name), mode, oid, stage))
 tracked = {name for name, _, _, _ in entries}
 allowed_md = {'README.md', 'CHANGELOG.md', 'NOTICE.md', 'CLAUDE.md',
-              'docs/KNOWN-ISSUES.md', 'docs/PRIVACY.md'}
+              'docs/PRIVACY.md'}
 version = re.compile(r'\b0\.1\.[0-9]+')
 reference = re.compile(r'\b(?:docs|patches)/[A-Za-z0-9_./+@-]+\.md\b')
 process_test = re.compile(r'Round[0-9]|Minors')

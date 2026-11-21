@@ -96,5 +96,5 @@ Found a problem? [Open an issue](https://github.com/TheEggmanEmpire/Backstage/is
 
 ## More
 
-[Known issues](docs/KNOWN-ISSUES.md) · [Changelog](CHANGELOG.md) ·
+[Changelog](CHANGELOG.md) ·
 License GPL-3.0-or-later, a modified [Dextop](NOTICE.md)

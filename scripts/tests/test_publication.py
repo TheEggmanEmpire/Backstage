@@ -40,7 +40,7 @@ class PublicationTest(unittest.TestCase):
     def test_allowed_paths_and_untracked_files(self):
         repo = self.repo
         for name in ('README.md', 'CHANGELOG.md', 'NOTICE.md', 'CLAUDE.md',
-                     'docs/' + 'KNOWN-ISSUES.md', 'docs/' + 'PRIVACY.md',
+                     'docs/' + 'PRIVACY.md',
                      'licenses/package.md',
                      'upstream/vendor/internal.md', 'docs/assets/icon.png', 'docs/screenshots/home.png'):
             track(repo, name)

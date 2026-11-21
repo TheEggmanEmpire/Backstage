@@ -6,7 +6,7 @@ These rules hold for every change, by anyone (orchestrator, workers, CI jobs tha
 ## Public repository
 
 This repository is public. Commit only code, build files, tests and the user-facing files: `README.md`,
-`CHANGELOG.md`, `NOTICE.md`, `CLAUDE.md`, `LICENSE`, `licenses/`, `docs/KNOWN-ISSUES.md`, `docs/PRIVACY.md`,
+`CHANGELOG.md`, `NOTICE.md`, `CLAUDE.md`, `LICENSE`, `licenses/`, `docs/PRIVACY.md`,
 `docs/assets/`, `docs/screenshots/`.
 
 - Docs stay local. Never commit internal or AI-written docs: design notes, architecture, development/release
