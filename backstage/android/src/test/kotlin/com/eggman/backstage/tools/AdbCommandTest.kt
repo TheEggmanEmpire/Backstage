@@ -1,5 +1,6 @@
 package com.eggman.backstage.tools
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.privileged.ShellResult
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -176,8 +177,8 @@ class AdbCommandTest {
         val available = unavailable.copy(adb = true)
         assertFalse(registry.forAgent(unavailable).any { it.name == "adb_command" })
         assertFalse(registry.forMcp(unavailable).any { it.name == "adb_command" })
-        assertTrue(registry.forAgent(available).any { it.name == "adb_command" })
-        assertTrue(registry.forMcp(available).any { it.name == "adb_command" })
+        assertEquals(!PLAY_DISTRIBUTION, registry.forAgent(available).any { it.name == "adb_command" })
+        assertEquals(!PLAY_DISTRIBUTION, registry.forMcp(available).any { it.name == "adb_command" })
         assertTrue(registry["adb_command"]!!.mutating)
         assertFalse(registry["adb_command"]!!.irreversible)
         assertTrue(registry["adb_command"]!!.targets.isEmpty())

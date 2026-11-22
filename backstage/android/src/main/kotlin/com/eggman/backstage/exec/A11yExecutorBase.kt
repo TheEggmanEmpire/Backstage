@@ -26,7 +26,7 @@ abstract class A11yExecutorBase(ownPackages: Set<String>) : Executor {
 
     protected fun requireA11y(): AgentAccessibility =
         a11y() ?: throw IllegalStateException(
-            if (com.eggman.backstage.a11y.AccessibilityBridge.hostComponent() == null) com.eggman.backstage.a11y.AccessibilityEnabler.NO_HOST
+            if (com.eggman.backstage.a11y.AccessibilityBridge.hostComponent() == null) com.eggman.backstage.a11y.DistributionAccessibility.status ?: com.eggman.backstage.a11y.AccessibilityEnabler.NO_HOST
             else "Backstage cannot see or act: its accessibility service \"Backstage\" is switched off (Settings → Accessibility).",
         )
 

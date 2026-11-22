@@ -1,0 +1,5 @@
+<resources>
+    <string name="accessibility_description">After your consent, Backstage Agent reads screen content and notifications and performs taps, typing, gestures and navigation for tasks you request in Backstage. Data is shared only with the matching, same-signed Backstage app. That app can send task context to your configured AI provider. You can revoke access in this app or in Android Accessibility settings.</string>
+    <string name="companion_restricted_settings">If Android blocks accessibility, open Backstage Agent app info and select “Allow restricted settings” from the menu. Then return here and enable Backstage Agent.</string>
+    <string name="companion_open_app_info">Open Backstage Agent app info</string>
+</resources>

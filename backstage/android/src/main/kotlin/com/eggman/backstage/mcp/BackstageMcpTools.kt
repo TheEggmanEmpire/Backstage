@@ -1,5 +1,6 @@
 package com.eggman.backstage.mcp
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.agent.AgentEnvironment
 import com.eggman.backstage.agent.ExecutionLease
 import com.eggman.backstage.agent.PeekableContext
@@ -149,6 +150,11 @@ class BackstageMcpTools(
    */
     private suspend fun preflight(target: Target, task: String): String? {
         var r = controller().readiness()
+        if (PLAY_DISTRIBUTION && env.readinessInputs().companionStatus != null) return when {
+            !r.providerConfigured -> r.problems.firstOrNull { it.startsWith("AI provider") } ?: "Set up an AI provider."
+            busy() -> "Busy: resubmit once the agent is idle."
+            else -> null
+        }
         if (!r.accessibilityEnabled) return "Backstage's accessibility service is off, so nothing can be operated. " + r.problems.firstOrNull { "ccessibility" in it }.orEmpty()
         val kind = decide(target, task)?.kind
         if (ReadinessCheck.needsPhoneScreen(env.readinessInputs(), kind)) {
@@ -250,9 +256,11 @@ class BackstageMcpTools(
     internal fun statusJson(r: Readiness, i: ReadinessInputs, decision: TargetDecision?, desktopReport: JSONObject? = null): JSONObject {
         val kind = decision?.kind
         val phoneScreen = ReadinessCheck.needsPhoneScreen(i, kind)
-        val ready = ReadinessCheck.readyFor(r, i, kind)
+        val screenReady = ReadinessCheck.readyFor(r, i, kind)
+        val ready = if (PLAY_DISTRIBUTION && i.companionStatus != null) r.providerConfigured else screenReady
         val reason = when {
-            !r.accessibilityEnabled -> "Accessibility service off: " + (r.problems.firstOrNull { "ccessibility" in it } ?: "enable it on the phone.")
+            !r.accessibilityEnabled -> if (PLAY_DISTRIBUTION) i.companionStatus ?: "Screen access unavailable."
+            else "Accessibility service off: " + (r.problems.firstOrNull { "ccessibility" in it } ?: "enable it on the phone.")
             phoneScreen && !r.screenOn -> "Display off: call wake_device first."
             phoneScreen && !r.unlocked -> "Phone locked: the owner has to unlock it."
             !r.providerConfigured -> r.problems.firstOrNull { it.startsWith("AI provider") } ?: "No AI provider configured."
@@ -271,6 +279,7 @@ class BackstageMcpTools(
             .put("screen_on", r.screenOn)
             .put("locked", !r.unlocked)
             .put("accessibility_enabled", r.accessibilityEnabled)
+            .apply { if (PLAY_DISTRIBUTION) put("screen_ready", screenReady) }
             .put("ready", ready)
             .putOpt("reason", reason)
             .put("target", kind?.label ?: JSONObject.NULL)

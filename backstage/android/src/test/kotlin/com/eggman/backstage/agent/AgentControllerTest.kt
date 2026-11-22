@@ -1,5 +1,6 @@
 package com.eggman.backstage.agent
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.agent.api.Source
 import com.eggman.backstage.agent.api.Target
 import com.eggman.backstage.agent.api.TaskRequest
@@ -280,7 +281,8 @@ class AgentControllerTest {
         runCurrent()
         val q = c.state.value.current!!.question!!
         assertTrue(q.confirm)
-        assertEquals("Send an SMS to +49 170 1234567: “Running late”", q.text)
+        val action = if (PLAY_DISTRIBUTION) "Prepare an SMS draft" else "Send an SMS"
+        assertEquals("$action to +49 170 1234567: “Running late”", q.text)
         assertTrue(c.answerFromUi("deny", h.id, q.text))
         val s = h.await()
         assertTrue(dc.calls.isEmpty())

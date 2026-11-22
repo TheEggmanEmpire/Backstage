@@ -60,6 +60,14 @@ jobs:
       - name: Agent library unit tests
         run: scripts/test.sh --only library
 
+      - name: Build and test the debug companion
+        env:
+          BACKSTAGE_WRITE_SHA256SUMS: '0'
+        run: |
+          scripts/build-companion.sh debug
+          backstage/gradlew -p backstage --console=plain :companion:testDebugUnitTest
+          backstage/gradlew --stop
+
       - name: Agent library Android Lint (errors fail)
         run: scripts/test.sh --only lint
 
@@ -73,7 +81,9 @@ jobs:
         run: scripts/build-apk.sh debug --no-prepare
 
       - name: Verify the debug APK (signing, badging, exported components, FGS types, accessibility configs)
-        run: for apk in dist/backstage-[0-9]*-debug.apk; do scripts/verify-apk.sh "$apk"; done
+        run: |
+          for apk in dist/backstage-[0-9]*-debug.apk; do scripts/verify-apk.sh "$apk"; done
+          (cd dist && sha256sum -- backstage-play-agent-*-debug.apk >> SHA256SUMS)
 
       # The APKs are in dist/; native libraries, dex and APK outputs in the work tree are not needed again.
       - name: Remove build intermediates no later step needs
@@ -100,6 +110,7 @@ jobs:
             build/flutter-test-report.json
             build/work/dextop/build/*/reports/
             backstage/android/build/reports/
+            backstage/companion/build/reports/
           if-no-files-found: ignore
 
       - name: Disk usage
@@ -156,6 +167,7 @@ jobs:
       # (f7deb2c2…); a fork sets the repository variable BACKSTAGE_RELEASE_CERT_SHA256 to its own.
       BACKSTAGE_EXPECT_CERT_SHA256: ${{ vars.BACKSTAGE_RELEASE_CERT_SHA256 || 'f7deb2c28a5e45c9f1a13003d25766842bf6940b97116aa2bcc31a39b4976c73' }}
       BACKSTAGE_TARGET_PLATFORM: android-arm64
+      BACKSTAGE_WRITE_SHA256SUMS: '0'
     steps:
       - uses: actions/checkout@v4
 
@@ -187,11 +199,53 @@ jobs:
       - name: Verify the release APK
         run: for apk in dist/backstage-[0-9]*-release.apk; do scripts/verify-apk.sh "$apk" --release; done
 
-      - name: Check the version against the tag
+      - name: Free disk space for the Play release
+        run: scripts/ci-free-disk-space.sh --build-outputs
+
+      - name: Build the Play AAB and APK (arm64)
+        env:
+          BACKSTAGE_KEYSTORE_PASSWORD: ${{ secrets.BACKSTAGE_KEYSTORE_PASSWORD }}
+          BACKSTAGE_KEY_ALIAS: ${{ secrets.BACKSTAGE_KEY_ALIAS }}
+          BACKSTAGE_KEY_PASSWORD: ${{ secrets.BACKSTAGE_KEY_PASSWORD }}
+          BACKSTAGE_PLAY_REPORT_ENDPOINT: ${{ vars.BACKSTAGE_PLAY_REPORT_ENDPOINT }}
+        run: scripts/build-apk.sh release --flavor play --no-prepare
+
+      - name: Free disk space for the companion release
+        run: scripts/ci-free-disk-space.sh --build-outputs
+
+      - name: Build the companion release APK
+        env:
+          BACKSTAGE_KEYSTORE_PASSWORD: ${{ secrets.BACKSTAGE_KEYSTORE_PASSWORD }}
+          BACKSTAGE_KEY_ALIAS: ${{ secrets.BACKSTAGE_KEY_ALIAS }}
+          BACKSTAGE_KEY_PASSWORD: ${{ secrets.BACKSTAGE_KEY_PASSWORD }}
+        run: scripts/build-companion.sh release
+
+      - name: Verify Play and companion signing and write APK checksums
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          ls dist/backstage-"$tag"-arm64-v8a-release.apk > /dev/null 2>&1 ||
-            echo "::warning::No dist/backstage-${tag}-arm64-v8a-release.apk: the backstage version in backstage/dextop-integration.gradle does not match tag $GITHUB_REF_NAME"
+          version="${GITHUB_REF_NAME#v}"
+          signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          expected=$(printf '%s' "$BACKSTAGE_EXPECT_CERT_SHA256" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]:')
+          cd dist
+          github="backstage-$version-arm64-v8a-release.apk"
+          play="backstage-play-$version-arm64-v8a-release.apk"
+          companion="backstage-play-agent-$version-release.apk"
+          for apk in "$play" "$companion"; do
+            certs=$("$signer" verify --print-certs "$apk")
+            actual=$(awk '/^Signer #[0-9]+ certificate SHA-256 digest:/ {print $NF}' <<< "$certs")
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$apk is signed with an unexpected certificate"
+              exit 1
+            fi
+          done
+          sha256sum -- "$github" "$play" "$companion" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Upload the Play AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: backstage-play-${{ github.ref_name }}-aab
+          path: dist/backstage-play-*-release.aab
+          if-no-files-found: error
 
       - name: Release notes (changelog + source code)
         run: |
@@ -213,7 +267,7 @@ jobs:
             echo
             echo "Backstage is GPL-3.0-or-later (a modified version of Dextop). The corresponding source of these APKs is this"
             echo "repository at tag \`$GITHUB_REF_NAME\` (commit \`$GITHUB_SHA\`): the \"Source code\" archives of this release."
-            echo "The APK names that commit in \`assets/backstage/THIRD_PARTY_NOTICES.txt\`."
+            echo "The main app APKs name that commit in \`assets/backstage/THIRD_PARTY_NOTICES.txt\`."
             echo
             echo "Prebuilt third-party binaries inside the APK are redistributed unchanged; NOTICE.md and"
             echo "\`licenses/third-party-sources.tsv\` name each one and where its source is published."

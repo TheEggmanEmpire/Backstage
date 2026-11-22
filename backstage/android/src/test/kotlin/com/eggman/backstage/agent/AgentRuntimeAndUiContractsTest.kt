@@ -1,5 +1,6 @@
 package com.eggman.backstage.agent
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.agent.api.AgentState
 import com.eggman.backstage.agent.api.PendingQuestion
 import com.eggman.backstage.agent.api.PlanStep
@@ -104,16 +105,23 @@ class AgentRuntimeAndUiContractsTest {
     @Test fun desktopRefusesKeysThatActOnTheWholePhone() = runTest {
         val host = FakeDesktopHost()
         val exec = DesktopExecutor(host, host.geometry()!!, emptySet())
-        for (k in listOf("power", "camera", "media_play_pause", "media_next", "ctrl+power")) {
-            val r = exec.key(k)
-            assertFalse(k, r.ok)
+        if (PLAY_DISTRIBUTION) {
+            for (key in listOf("power", "camera", "media_play_pause", "media_next", "ctrl+power", "enter", "volume_up")) {
+                assertFalse(key, exec.key(key).ok)
+            }
+            assertTrue(host.calls.isEmpty())
+        } else {
+            for (k in listOf("power", "camera", "media_play_pause", "media_next", "ctrl+power")) {
+                val r = exec.key(k)
+                assertFalse(k, r.ok)
+            }
+            assertFalse(host.calls.any { it.startsWith("key 26") || it.startsWith("key 27") || it.startsWith("key 85") })
+            assertTrue(exec.key("enter").ok)
+            assertTrue(host.calls.contains("key 66 0"))
+            assertTrue(exec.key("volume_up").ok)
+            assertTrue(DesktopKeyPolicy.refusal(187)!!.isNotBlank())
+            assertNull(DesktopKeyPolicy.refusal(66))
         }
-        assertFalse(host.calls.any { it.startsWith("key 26") || it.startsWith("key 27") || it.startsWith("key 85") })
-        assertTrue(exec.key("enter").ok)
-        assertTrue(host.calls.contains("key 66 0"))
-        assertTrue(exec.key("volume_up").ok)
-        assertTrue(DesktopKeyPolicy.refusal(187)!!.isNotBlank())
-        assertNull(DesktopKeyPolicy.refusal(66))
     }
 
     @Test fun desktopRecentsNeverFallsBackToThePhonesOverview() = runTest {
@@ -124,7 +132,7 @@ class AgentRuntimeAndUiContractsTest {
         val exec = DesktopExecutor(host, fake.geometry()!!, emptySet())
         val r = exec.key("recents")
         assertFalse(r.ok)
-        assertEquals(DesktopKeyPolicy.RECENTS_UNAVAILABLE, r.message)
+        assertEquals(if (PLAY_DISTRIBUTION) "Use an on-screen control on this display." else DesktopKeyPolicy.RECENTS_UNAVAILABLE, r.message)
         assertFalse(fake.calls.any { it.startsWith("key 187") })
     }
 

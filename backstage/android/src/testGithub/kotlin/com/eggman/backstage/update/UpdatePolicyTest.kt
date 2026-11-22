@@ -27,6 +27,22 @@ class UpdatePolicyTest {
         assertThrows(IllegalArgumentException::class.java) { UpdatePolicy.assets("1.0.1", listOf(apk)) }
         assertThrows(IllegalArgumentException::class.java) { UpdatePolicy.assets("1.0.1", listOf(apk, apk, sums)) }
     }
+    @Test fun mixedReleaseSelectsOnlyTheGitHubApkAndChecksum() {
+        val github = ReleaseAsset("backstage-1.0.1-arm64-v8a-release.apk", "", 200)
+        val play = github.copy(name = "backstage-play-1.0.1-arm64-v8a-release.apk")
+        val companion = github.copy(name = "backstage-play-agent-1.0.1-release.apk")
+        val sums = github.copy(name = "SHA256SUMS")
+        val update = UpdatePolicy.assets("1.0.1", listOf(play, companion, github, sums))
+        val hash = "ab".repeat(32)
+        val manifest = listOf("cd".repeat(32) to play, hash to github, "ef".repeat(32) to companion)
+            .joinToString("\n") { (digest, apk) -> "$digest  ${apk.name}" }
+        assertEquals(UpdateAssets(github, sums), update)
+        assertEquals(hash, UpdatePolicy.checksum(manifest, update.apk.name))
+        assertThrows(IllegalArgumentException::class.java) {
+            UpdatePolicy.assets("1.0.1", listOf(play, companion, sums))
+        }
+    }
+
     @Test fun checksumIsAnExactUnambiguousLine() {
         val hash = "ab".repeat(32)
         val name = "backstage-1.0.1-arm64-v8a-release.apk"

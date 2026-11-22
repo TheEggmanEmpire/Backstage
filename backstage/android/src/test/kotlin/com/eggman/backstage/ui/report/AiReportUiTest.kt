@@ -1,5 +1,6 @@
 package com.eggman.backstage.ui.report
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.content.Intent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -41,7 +42,7 @@ class AiReportUiTest {
             MaterialTheme { ReportableAiResponse("Selected assistant text", "task-1") { Text("Selected assistant text", it) } }
         }
         compose.onNodeWithText("Selected assistant text").performTouchInput { longClick() }
-        compose.onNodeWithText("Report response").performClick()
+        compose.onNodeWithText(if (PLAY_DISTRIBUTION) "Report this AI response" else "Report response").performClick()
         compose.onNodeWithText(ReportCategory.HARMFUL.label).performClick()
         compose.onNodeWithText("Save report").performClick()
         compose.waitUntil(10_000) { AiReportStore(directory).list().isNotEmpty() }

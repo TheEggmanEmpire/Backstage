@@ -1,5 +1,6 @@
 package com.eggman.backstage.tools
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.Manifest
 import android.app.NotificationManager
 import android.bluetooth.BluetoothManager
@@ -16,7 +17,6 @@ import android.net.Uri
 import android.net.wifi.WifiManager
 import android.provider.ContactsContract
 import android.provider.Settings
-import android.telephony.SmsManager
 import com.eggman.backstage.a11y.AgentAccessibility
 import com.eggman.backstage.privileged.Privileged
 import org.json.JSONObject
@@ -24,6 +24,7 @@ import org.json.JSONObject
 /** Android implementation of [DeviceControl]; settings writes fall back to the privileged shell. */
 class AndroidDeviceControl(
     private val context: Context,
+    private val canOpenDraft: (Context) -> Boolean = SmsTransport::canOpen,
 ) : DeviceControl {
     private val audio get() = context.getSystemService(AudioManager::class.java)
     private fun granted(p: String) = context.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
@@ -37,8 +38,7 @@ class AndroidDeviceControl(
             "brightness", "auto_rotate", "screen_timeout" -> canWriteSettings()
             "flashlight" -> pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH)
             "contacts" -> granted(Manifest.permission.READ_CONTACTS)
-            "sms" -> pm.hasSystemFeature(PackageManager.FEATURE_TELEPHONY_MESSAGING) &&
-                granted(Manifest.permission.SEND_SMS)
+            "sms" -> SmsTransport.available(context)
             "call" -> granted(Manifest.permission.CALL_PHONE) && pm.hasSystemFeature(PackageManager.FEATURE_TELEPHONY_CALLING)
             "location" -> granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION)
             else -> false
@@ -157,14 +157,10 @@ class AndroidDeviceControl(
 
     override fun sendSms(number: String, message: String): Boolean = sendSmsResult(number, message) != SmsSendResult.FAILED
 
-    override fun sendSmsResult(number: String, message: String): SmsSendResult = runCatching {
-        if (!granted(Manifest.permission.SEND_SMS)) return SmsSendResult.FAILED
-        // If the grant is revoked, report failure. Never replay an uncertain direct send as another action.
-        val sms = context.getSystemService(SmsManager::class.java)
-        val parts = sms.divideMessage(message)
-        if (parts.size > 1) sms.sendMultipartTextMessage(number, null, parts, null, null) else sms.sendTextMessage(number, null, message, null, null)
-        SmsSendResult.SENT
-    }.getOrDefault(SmsSendResult.FAILED)
+    val smsRequiresUserSend get() = PLAY_DISTRIBUTION
+
+    override fun sendSmsResult(number: String, message: String): SmsSendResult =
+        SmsTransport.send(context, number, message, canOpenDraft)
 
     override fun call(number: String): Boolean = runCatching {
         val i = Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number))).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

@@ -1,5 +1,7 @@
 package com.eggman.backstage.tools
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
+import com.eggman.backstage.a11y.DistributionAccessibility
 import com.eggman.backstage.exec.TargetKind
 import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
@@ -41,13 +43,19 @@ class ToolRegistry(val tools: List<Tool>) {
         /** Shell identity through Shizuku/Stellar or Dextop wireless debugging. */
         val adb: Boolean = false,
         val omp: Boolean = false,
+        val screen: Boolean = true,
+        val companionCapabilities: Int = 0,
+        val localPrivilege: Boolean = false,
     ) {
         companion object {
             /** What the given device services can actually do. */
             fun of(s: DeviceServices, desktop: Boolean, vision: Boolean, planMode: Boolean) = Availability(
                 desktop = desktop, vision = vision, planMode = planMode,
-                omp = com.eggman.backstage.omp.OmpHarness.unavailableReason() == null,
-                adb = com.eggman.backstage.privileged.Privileged.available(),
+                omp = !PLAY_DISTRIBUTION && com.eggman.backstage.omp.OmpHarness.unavailableReason() == null,
+                adb = !PLAY_DISTRIBUTION && com.eggman.backstage.privileged.Privileged.available(),
+                screen = DistributionAccessibility.screenAvailable,
+                companionCapabilities = DistributionAccessibility.companionCapabilities,
+                localPrivilege = PLAY_DISTRIBUTION && com.eggman.backstage.privileged.Privileged.available(),
                 calendar = s.calendar != null, alarms = s.alarms != null,
                 weather = s.modules().weatherApiKey.isNotBlank(),
                 memory = s.memory != null && s.modules().memoryEnabled,
@@ -61,12 +69,16 @@ class ToolRegistry(val tools: List<Tool>) {
     }
 
     private fun usable(t: Tool, a: Availability): Boolean {
+        if (PLAY_DISTRIBUTION) {
+            DistributionTools.available(t, a)?.let { return it }
+            if (t.name in SCREEN_TOOLS && !a.screen) return false
+        }
         if (t.targets.isNotEmpty()) {
             val ok = (TargetKind.DESKTOP in t.targets && a.desktop) || (TargetKind.PHONE in t.targets && a.phone)
             if (!ok) return false
         }
         if ((t.name.startsWith("omp_subagent") || t.name == "run_skill_script") && (!a.omp || !a.adb)) return false
-        if (t.name == "adb_command" && !a.adb) return false
+        if (!PLAY_DISTRIBUTION && t.name == "adb_command" && !a.adb) return false
         if (t.name == "screenshot" && !a.vision) return false
         if (t.name == "update_plan" && !a.planMode) return false
         if (t.name.contains("calendar") && !a.calendar) return false
@@ -95,6 +107,9 @@ class ToolRegistry(val tools: List<Tool>) {
    */
     suspend fun execute(ctx: ToolContext, name: String, args: JSONObject): ToolResult {
         val tool = byName[name] ?: return ToolResult.error("Unknown tool '$name'. Available: ${tools.joinToString { it.name }}")
+        if (PLAY_DISTRIBUTION && name in SCREEN_TOOLS && !DistributionAccessibility.screenAvailable) {
+            return ToolResult.error(requireNotNull(DistributionAccessibility.status))
+        }
         if (args.has("_raw")) return ToolResult.error("Arguments for $name were not valid JSON: ${args.optString("_raw").take(200)}")
         return try {
             val a = Args(args)
@@ -120,6 +135,10 @@ class ToolRegistry(val tools: List<Tool>) {
     }
 
     companion object {
+        val SCREEN_TOOLS = setOf(
+            "get_screen", "screenshot", "tap", "long_press", "swipe", "scroll",
+            "type_text", "press_key", "await_screen_change", "browser_search", "get_notifications",
+        )
         val SKILL_TOOLS = setOf("list_skills", "use_skill", "read_skill_file", "run_skill_script")
 
         fun noApprover(name: String) = "Refused: $name cannot be undone and needs the phone user's approval, which a direct MCP call " +
@@ -134,12 +153,12 @@ class ToolRegistry(val tools: List<Tool>) {
                 SetAlarmTool(), SetTimerTool(), GetAlarmsTool(), CancelAlarmTool(), GetWeatherTool(), GetWeatherForecastTool(),
                 MemorySaveTool(), MemorySearchTool(),
                 CreateScheduledTaskTool(), ListScheduledTasksTool(), UpdateScheduledTaskTool(), DeleteScheduledTaskTool(),
-                ClipboardGetTool(), ClipboardSetTool(), NotificationsTool(), AdbCommandTool(), OmpSubagentTool(), OmpSubagentStatusTool(), OmpSubagentCancelTool(),
-                com.eggman.backstage.skills.ListSkillsTool(), com.eggman.backstage.skills.UseSkillTool(), com.eggman.backstage.skills.ReadSkillFileTool(), RunSkillScriptTool(),
+                ClipboardGetTool(), ClipboardSetTool(), NotificationsTool(), *DistributionTools.privileged,
+                com.eggman.backstage.skills.ListSkillsTool(), com.eggman.backstage.skills.UseSkillTool(), com.eggman.backstage.skills.ReadSkillFileTool(), *(if (PLAY_DISTRIBUTION) emptyArray() else arrayOf<Tool>(RunSkillScriptTool())),
             ) + DeviceControlTools.all() + listOf(
                 DesktopStartTool(), DesktopStatusTool(), DesktopPresentationTool(), LaunchAppTool("desktop_launch_app", forceDesktop = true),
-                DesktopRightClickTool(), DesktopScrollWheelTool(), DesktopWindowListTool(), DesktopCloseWindowsTool(),
-                DesktopShortcutTool(), DesktopKeyComboTool(), DesktopStopTool(), DesktopRestartTool(), SwitchScreenTool(), WindowStateTool(), WindowControlTool(),
+                *(if (PLAY_DISTRIBUTION) emptyArray() else arrayOf<Tool>(DesktopRightClickTool(), DesktopScrollWheelTool())), DesktopWindowListTool(), DesktopCloseWindowsTool(),
+                *(if (PLAY_DISTRIBUTION) emptyArray() else arrayOf<Tool>(DesktopShortcutTool(), DesktopKeyComboTool())), DesktopStopTool(), DesktopRestartTool(), SwitchScreenTool(), WindowStateTool(), WindowControlTool(),
                 UpdatePlanTool(), ActSequenceTool(), AskUserTool(), PendingUserActionTool(), ConfirmActionTool(), MoveFloatingWidgetTool(), FinishTool(),
             ),
         )

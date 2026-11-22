@@ -1,5 +1,7 @@
 package com.eggman.backstage.agent
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
+import com.eggman.backstage.a11y.DistributionAccessibility
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
@@ -203,8 +205,9 @@ class AndroidAgentEnvironment(private val context: Context) : AgentEnvironment {
         return ReadinessInputs(
             providerProblem = settings.providerConfig().problem(),
             accessibilityEnabled = AgentAccessibility.instance != null,
-            accessibilityHost = com.eggman.backstage.a11y.AccessibilityBridge.hostComponent() != null,
-            accessibilityGaps = com.eggman.backstage.a11y.AccessibilityBridge.currentGaps(),
+            accessibilityHost = DistributionAccessibility.hostAvailable,
+            companionStatus = DistributionAccessibility.status,
+            accessibilityGaps = DistributionAccessibility.gaps(),
             privilegedAvailable = privileged,
             hostPresent = host != null,
             desktopActive = active,
@@ -233,6 +236,7 @@ class AndroidAgentEnvironment(private val context: Context) : AgentEnvironment {
     override val prewarmLlmConnection: Boolean get() = true
 
     override suspend fun beforeTask(request: TaskRequest) {
+        if (PLAY_DISTRIBUTION && AgentAccessibility.instance == null) return
         if (AgentAccessibility.instance == null && settings.mayAutoEnableAccessibility) {
             AccessibilityAutoEnable.ensureConnected(context)
         }
@@ -257,7 +261,7 @@ class AndroidAgentEnvironment(private val context: Context) : AgentEnvironment {
         if (PhoneScreen.on(context)) return true
         // inject the wake key through the privileged input manager (no `input` process to spawn); the shell
         // command stays as the fallback.
-        if (privileged() && !com.eggman.backstage.exec.InputInjector(android.view.Display.DEFAULT_DISPLAY).key(android.view.KeyEvent.KEYCODE_WAKEUP)) {
+        if (!PLAY_DISTRIBUTION && privileged() && !com.eggman.backstage.exec.InputInjector(android.view.Display.DEFAULT_DISPLAY).key(android.view.KeyEvent.KEYCODE_WAKEUP)) {
             Privileged.exec("input", "keyevent", "KEYCODE_WAKEUP")
         }
         if (!PhoneScreen.on(context)) {

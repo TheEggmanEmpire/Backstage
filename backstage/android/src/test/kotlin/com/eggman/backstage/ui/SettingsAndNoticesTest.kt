@@ -1,5 +1,6 @@
 package com.eggman.backstage.ui
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.data.InMemoryMemory
 import com.eggman.backstage.data.MemoryStore
 import com.eggman.backstage.data.NonInteractiveConfirm
@@ -31,7 +32,7 @@ class SettingsAndNoticesTest {
         assertFalse("consent is not presumed", s.accessibilityConsent)
         assertFalse(s.mayAutoEnableAccessibility)
         s.accessibilityConsent = true
-        assertTrue(s.mayAutoEnableAccessibility)
+        assertEquals(!PLAY_DISTRIBUTION, s.mayAutoEnableAccessibility)
         s.autoEnableAccessibility = false
         assertFalse(s.mayAutoEnableAccessibility)
         // Withdrawing consent stops it even with auto-enable on.

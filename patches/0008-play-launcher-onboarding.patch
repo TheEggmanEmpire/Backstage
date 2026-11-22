@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Backstage patch bot <patches@backstage.invalid>
+Date: Sun, 22 Nov 2026 12:31:18 +0900
+Subject: [PATCH] play-launcher-onboarding
+
+---
+ .../kotlin/moe/n4tsu/dextop/DextopLauncherActivity.kt    | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLauncherActivity.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLauncherActivity.kt
+index 5cfd7792d5b1624a98e02d6eb777d8730a4d62ad..8cfac6e4c47681727cc7e327ae2c360062013cb8 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLauncherActivity.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLauncherActivity.kt
+@@ -11,6 +11,15 @@ class DextopLauncherActivity : Activity() {
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
+         val launchDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
++        if (BuildConfig.DISTRIBUTION_CHANNEL == "play" && launchDisplayId == Display.DEFAULT_DISPLAY &&
++            intent.action == Intent.ACTION_MAIN &&
++            intent.hasCategory(Intent.CATEGORY_LAUNCHER) &&
++            !com.eggman.backstage.ui.settings.SettingsStores.get(this).onboardingDone) {
++            startActivity(Intent(this, com.eggman.backstage.ui.AgentScreenActivity::class.java)
++                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
++            finish()
++            return
++        }
+         val desktopLaunch = MirrorService.isActive() && launchDisplayId != Display.DEFAULT_DISPLAY
+         val destination = if (desktopLaunch) DesktopActivity::class.java else MainActivity::class.java
+         val flags = if (desktopLaunch) {

@@ -46,7 +46,7 @@ internal class ApkDownload(
             UpdatePolicy.checksum(response.boundedText(262_144), assets.apk.name)
         }
         try {
-            // File may be read-only from a previous verified attempt. Delete, never append an unknown partial APK.
+            // Use an empty destination. The existing file may have been marked read-only after verification.
             check(!file.exists() || file.delete()) { "Cannot clear previous update file" }
             request(assets.apk.url).execute().use { response ->
                 check(response.isSuccessful) { "APK download returned HTTP ${response.code}" }

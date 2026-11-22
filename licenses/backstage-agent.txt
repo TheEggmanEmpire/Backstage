@@ -1,0 +1,15 @@
+Backstage Agent
+
+Copyright (C) 2026 TheEggmanEmpire and the Backstage contributors.
+Licensed under GNU GPL version 3 or, at your option, any later version.
+The full text is in assets/LICENSE.
+
+Corresponding source: https://github.com/TheEggmanEmpire/Backstage
+
+The companion uses these Apache-2.0 dependencies:
+- Kotlin standard library: https://github.com/JetBrains/kotlin
+- Kotlin coroutines: https://github.com/Kotlin/kotlinx.coroutines
+- AndroidX annotations: https://android.googlesource.com/platform/frameworks/support/
+- Shizuku API: https://github.com/RikkaApps/Shizuku-API
+
+The full Apache-2.0 license text is in assets/Apache-2.0.txt.

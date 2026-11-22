@@ -1,5 +1,6 @@
 package com.eggman.backstage.ui.onboarding
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.Manifest
 import android.app.AlarmManager
 import android.content.Context
@@ -82,7 +83,8 @@ object AndroidPermissionProbe {
 
     @android.annotation.SuppressLint("BatteryLife")
     fun batterySettings(context: Context) =
-        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (PLAY_DISTRIBUTION) Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        else Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
     fun notificationSettings(context: Context) =
         Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

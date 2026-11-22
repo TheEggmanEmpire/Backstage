@@ -1,5 +1,6 @@
 package com.eggman.backstage.skills
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.agent.AgentControllerImpl
 import com.eggman.backstage.agent.FakeEnv
 import com.eggman.backstage.agent.PromptContext
@@ -87,7 +88,7 @@ class SkillPromptAndToolsTest {
         services.skillStore!!.setEnabled("alpha", true)
         assertTrue(names().containsAll(ToolRegistry.SKILL_TOOLS - "run_skill_script"))
         assertFalse("run_skill_script" in names()) // Runtime + privilege are separately required.
-        assertTrue(reg.forAgent(ToolRegistry.Availability(false, skills = true, omp = true, adb = true, overlay = false))
+        assertEquals(!PLAY_DISTRIBUTION, reg.forAgent(ToolRegistry.Availability(false, skills = true, omp = true, adb = true, overlay = false))
             .any { it.name == "run_skill_script" })
     }
 

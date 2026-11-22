@@ -1,5 +1,7 @@
 package com.eggman.backstage.init
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
+import com.eggman.backstage.a11y.DistributionAccessibility
 import kotlinx.coroutines.launch
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -56,32 +58,37 @@ object Backstage {
         Agents.controller = controller
         NotificationFeed.ignoredPackages = NotificationFeed.ignoredPackages + context.packageName
         bridge = installDesktopBridge(context, bridgeClassName)
-        DesktopHosts.current?.let { host ->
-            runCatching { host.addListener(AccessibilityAutoEnable.desktopListener(context) { environment.settings.mayAutoEnableAccessibility }) }
+        if (!PLAY_DISTRIBUTION) {
+            DesktopHosts.current?.let { host ->
+                runCatching { host.addListener(AccessibilityAutoEnable.desktopListener(context) { environment.settings.mayAutoEnableAccessibility }) }
+            }
         }
         // Locked mode: CPU and the desktop's own display group stay awake for tasks (AgentKeepAwake).
         runCatching { com.eggman.backstage.agent.AgentKeepAwake.install(context) }.onFailure { Log.w(TAG, "keep-awake", it) }
         // Agent status -> desktop mini window caption (no-op without the Dextop glue).
         MiniStatusBridge.start(controller.state)
-        // Shizuku-first: once Shizuku permission is granted, make it Dextop's provider, switch on the
-        // accessibility service and grant what the shell can (once; re-run from onboarding at any time).
-        runCatching {
-            PrivilegedSetup.installAutoSetup(
-                context,
-                shouldRun = { environment.settings.mayAutoEnableAccessibility && !environment.settings.privilegedSetupDone },
-                // Once the accessibility service is on, never again automatically (respects a later manual
-                // disable); grants a device refuses (e.g. an app-op it lacks) do not make it retry forever.
-                onDone = { report -> if (report.accessibilityDone) environment.settings.privilegedSetupDone = true },
-            )
-        }.onFailure { Log.w(TAG, "Shizuku auto-setup unavailable", it) }
-        // A detector pause interrupted by a process death: put the accessibility service back.
-        runCatching { com.eggman.backstage.a11y.DetectorPause.recover(context) }
+        if (!PLAY_DISTRIBUTION) {
+            // Shizuku-first: once Shizuku permission is granted, make it Dextop's provider, switch on the
+            // accessibility service and grant what the shell can (once; re-run from onboarding at any time).
+            runCatching {
+                PrivilegedSetup.installAutoSetup(
+                    context,
+                    shouldRun = { environment.settings.mayAutoEnableAccessibility && !environment.settings.privilegedSetupDone },
+                    // Once the accessibility service is on, never again automatically (respects a later manual
+                    // disable); grants a device refuses (e.g. an app-op it lacks) do not make it retry forever.
+                    onDone = { report -> if (report.accessibilityDone) environment.settings.privilegedSetupDone = true },
+                )
+            }.onFailure { Log.w(TAG, "Shizuku auto-setup unavailable", it) }
+            // A detector pause interrupted by a process death: put the accessibility service back.
+            runCatching { com.eggman.backstage.a11y.DetectorPause.recover(context) }
+        }
         initialized = true
         // MCP settings take effect at once, whoever writes them (settings page, store, restore): enabling starts the
         // server, disabling stops it, a new port or LAN choice rebinds it.
         val settings = environment.settings
         settings.observe { key -> if (key in Settings.MCP_SERVER_KEYS) AgentService.mcpSettingsChanged(context, settings.mcpEnabled) }
-        com.eggman.backstage.omp.OmpHarness.initialize(context, settings)
+        if (PLAY_DISTRIBUTION) DistributionAccessibility.connect(context)
+        else com.eggman.backstage.omp.OmpHarness.initialize(context, settings)
         // The selected model's real context window from the provider's model list (network, off the main thread).
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO).launch {
             com.eggman.backstage.llm.ContextDetect.detectAll(settings)

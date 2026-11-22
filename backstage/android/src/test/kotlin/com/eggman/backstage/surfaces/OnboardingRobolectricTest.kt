@@ -1,5 +1,6 @@
 package com.eggman.backstage.surfaces
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.Manifest
 import android.app.Application
 import com.eggman.backstage.ui.onboarding.AndroidPermissionProbe
@@ -62,13 +63,14 @@ class OnboardingRobolectricTest {
         assertTrue(item(ItemId.SYSTEM_SETTINGS).privilegedGrantable)
         shadowOf(app).grantPermissions(Manifest.permission.READ_CONTACTS, Manifest.permission.SEND_SMS)
         assertTrue(item(ItemId.CONTACTS).done)
-        assertTrue(item(ItemId.SMS).done)
+        assertEquals(!PLAY_DISTRIBUTION, item(ItemId.SMS).done)
         // The same grant is what makes the registry offer the tool (re-read per task, no restart).
         val names = com.eggman.backstage.tools.ToolRegistry.default().forAgent(
             com.eggman.backstage.tools.ToolRegistry.Availability(desktop = false,
                 deviceCapabilities = com.eggman.backstage.tools.DeviceAccess.granted(app).flatMap { it.capabilities }.toSet()),
         ).map { it.name }
-        assertTrue("contacts_search" in names && "sms_send" in names)
+        assertTrue("contacts_search" in names)
+        assertEquals(!PLAY_DISTRIBUTION, "sms_send" in names)
         assertFalse("phone_call" in names)
     }
 

@@ -1,5 +1,6 @@
 package com.eggman.backstage.omp.engine
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.data.*
 import com.eggman.backstage.ui.settings.CoreSettingsStore
 import org.junit.Assert.*
@@ -14,8 +15,10 @@ class OmpSettingsTest {
         assertEquals(AgentEngine.BACKSTAGE, settings.agentEngine)
         val ui = CoreSettingsStore(settings)
         ui.agentEngine = AgentEngine.OMP
-        assertEquals(AgentEngine.OMP, ui.agentEngine)
-        assertEquals(AgentEngine.OMP, Settings(values).agentEngine)
+        val expected = if (PLAY_DISTRIBUTION) AgentEngine.BACKSTAGE else AgentEngine.OMP
+        assertEquals(expected, ui.agentEngine)
+        assertEquals("OMP", values.getString("agent_engine"))
+        assertEquals(expected, Settings(values).agentEngine)
         values.putString("agent_engine", "future")
         assertEquals(AgentEngine.BACKSTAGE, settings.agentEngine)
     }

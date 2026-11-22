@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Backstage patch bot <patches@backstage.invalid>
+Date: Sun, 22 Nov 2026 12:31:18 +0900
+Subject: [PATCH] shell-page-validation
+
+---
+ lib/backstage_shell.dart | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/lib/backstage_shell.dart b/lib/backstage_shell.dart
+index 1ce615d4acf70dd68e496bb3192c3f6e2fa1a216..2b828c588def46247b043efdf0a90c02b1390e25 100644
+--- a/lib/backstage_shell.dart
++++ b/lib/backstage_shell.dart
+@@ -83,7 +83,8 @@ extension _BackstageShell on _HomeScreenState {
+     if (!backstageAiTab) return;
+     BackstageShellBridge.homeVisible.value = page == 0;
+     backstagePageSubscription = BackstageShellBridge.pages.listen((target) {
+-      if (mounted) backstageNavSelect(backstageShellPageIndex(target)!);
++      final index = backstageShellPageIndex(target);
++      if (mounted && index != null) backstageNavSelect(index);
+     });
+     BackstageShellBridge.invoke<String>('takeShellPage').then((target) {
+       final index = backstageShellPageIndex(target);

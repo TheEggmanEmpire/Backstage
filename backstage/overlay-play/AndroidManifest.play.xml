@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" tools:node="remove" />
+    <uses-permission android:name="android.permission.SEND_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" tools:node="remove" />
+    <!-- Both apps must share a signer to use the companion service. -->
+    <permission android:name="com.eggman.backstage.agent.permission.CONTROL"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.eggman.backstage.agent.permission.CONTROL" />
+    <queries>
+        <package android:name="com.eggman.backstage.agent" />
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+    </queries>
+
+    <permission
+        android:name="moe.n4tsu.dextop.permission.CARDEX_RELAY"
+        tools:node="remove" />
+
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_TOPICS" tools:node="remove" />
+    <uses-permission android:name="com.google.android.finsky.permission.BIND_GET_INSTALL_REFERRER_SERVICE"
+        tools:node="remove" />
+
+    <application
+        android:icon="@mipmap/bs_ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/bs_ic_launcher"
+        android:usesCleartextTraffic="false"
+        tools:replace="android:icon,android:label,android:usesCleartextTraffic,android:roundIcon">
+
+        <activity
+            android:name="moe.n4tsu.dextop.DextopLauncherActivity"
+            android:label="@string/app_name"
+            tools:replace="android:label" />
+
+        <!-- Screen access for the agent comes from the companion. -->
+        <service
+            android:name="moe.n4tsu.dextop.MirrorService"
+            android:label="@string/backstage_accessibility_label" />
+
+        <service
+            android:name="moe.n4tsu.dextop.CardexRelayService"
+            tools:node="remove" />
+        <receiver
+            android:name="moe.n4tsu.dextop.CardexRecoveryReceiver"
+            tools:node="remove" />
+        <activity
+            android:name="moe.n4tsu.dextop.CarCompanionPhoneActivity"
+            tools:node="remove" />
+        <activity
+            android:name="moe.n4tsu.dextop.AndroidAutoMirrorActivity"
+            tools:node="remove" />
+
+        <provider
+            android:name="com.google.firebase.provider.FirebaseInitProvider"
+            android:authorities="${applicationId}.firebaseinitprovider"
+            tools:node="remove" />
+        <receiver
+            android:name="com.google.android.gms.measurement.AppMeasurementReceiver"
+            tools:node="remove" />
+        <service
+            android:name="com.google.android.gms.measurement.AppMeasurementService"
+            tools:node="remove" />
+        <service
+            android:name="com.google.android.gms.measurement.AppMeasurementJobService"
+            tools:node="remove" />
+        <uses-library
+            android:name="android.ext.adservices"
+            tools:node="remove" />
+
+        <meta-data android:name="firebase_analytics_collection_deactivated" android:value="true" />
+        <meta-data android:name="firebase_analytics_collection_enabled" android:value="false" />
+        <meta-data android:name="google_analytics_adid_collection_enabled" android:value="false" />
+        <meta-data android:name="google_analytics_ssaid_collection_enabled" android:value="false" />
+        <meta-data android:name="google_analytics_default_allow_ad_personalization_signals" android:value="false" />
+        <meta-data android:name="google_analytics_default_allow_ad_user_data" android:value="false" />
+    </application>
+</manifest>

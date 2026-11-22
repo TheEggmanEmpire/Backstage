@@ -1,5 +1,6 @@
 package com.eggman.backstage.exec
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
@@ -20,7 +21,7 @@ class PhoneExecutor(
 ) : A11yExecutorBase(ownPackages) {
     override val kind = TargetKind.PHONE
     override val displayId: Int = Display.DEFAULT_DISPLAY
-    private val injector = InputInjector(displayId)
+    private val injector = if (PLAY_DISTRIBUTION) null else InputInjector(displayId)
 
     /** Re-read on every use: the phone rotates, and foldables change size when unfolded. */
     private val size = LiveDisplaySize {
@@ -93,6 +94,7 @@ class PhoneExecutor(
             val s = requireA11y()
             cursor(com.eggman.backstage.cursor.CursorEvent.Type(displayId, element?.centerX?.toFloat(), element?.centerY?.toFloat()))
             if (s.setText(element?.handle, displayId, text)) return@withContext ActionResult.ok("Entered text (verified)")
+            session.failureHint?.let { return@withContext ActionResult.fail(it) }
             var status = s.textVerification(element?.handle, displayId, text)
             if (status in setOf(com.eggman.backstage.a11y.TextVerification.LENGTH_LIMIT, com.eggman.backstage.a11y.TextVerification.FILTERED)) {
                 return@withContext ActionResult.fail("Text entry failed: ${status!!.message}")
@@ -101,13 +103,14 @@ class PhoneExecutor(
                 clickElement(element)
                 awaitSettle(800)
                 if (s.setText(null, displayId, text)) return@withContext ActionResult.ok("Entered text (verified)")
+                session.failureHint?.let { return@withContext ActionResult.fail(it) }
                 status = s.textVerification(null, displayId, text)
                 if (status in setOf(com.eggman.backstage.a11y.TextVerification.LENGTH_LIMIT, com.eggman.backstage.a11y.TextVerification.FILTERED)) {
                     return@withContext ActionResult.fail("Text entry failed: ${status!!.message}")
                 }
             }
             // Last resort only. Select-all is essential: key injection otherwise appends to an old value.
-            if (injector.available && injector.key(android.view.KeyEvent.KEYCODE_A, android.view.KeyEvent.META_CTRL_ON) && injector.typeViaKeys(text)) {
+            if (injector != null && injector.available && injector.key(android.view.KeyEvent.KEYCODE_A, android.view.KeyEvent.META_CTRL_ON) && injector.typeViaKeys(text)) {
                 val verified = s.textVerification(null, displayId, text)
                 return@withContext when (verified) {
                     com.eggman.backstage.a11y.TextVerification.VERIFIED -> ActionResult.ok("Typed text via key events (verified)")
@@ -139,8 +142,9 @@ class PhoneExecutor(
         val s = requireA11y()
         if (global != null && s.global(global)) return ActionResult.ok("Pressed $n")
         if (n == "enter" && s.imeEnter(displayId)) return ActionResult.ok("Pressed enter (keyboard action)")
+        if (PLAY_DISTRIBUTION) return ActionResult.fail("Backstage Agent could not send '$name'. Use an on-screen control instead.")
         val chord = KeyNames.chord(name) ?: return ActionResult.fail("Unknown key '$name'")
-        if (injector.available && injector.key(chord.first, chord.second)) return ActionResult.ok("Pressed $name")
+        if (injector != null && injector.available && injector.key(chord.first, chord.second)) return ActionResult.ok("Pressed $name")
         return ActionResult.fail("Key '$name' needs privileged access (Shizuku / wireless debugging); on the phone only back, home, recents, notifications, quick_settings and enter work without it")
     }
 

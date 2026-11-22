@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate OmpConfigTest's generated fixtures with the pinned omp package itself.
 
-First run:backstage:testDebugUnitTest --tests '*omp.OmpConfigTest'. Pass an extracted
+First run :backstage:testGithubDebugUnitTest --tests '*omp.OmpConfigTest'. Pass an extracted
 payload tree and host Bun executable. On Linux, the temporary tree also needs
 @oh-my-pi/pi-natives-linux-x64 at exactly OMP_VERSION (APK payloads only ship Android).
 This check never resolves !commands or provider credentials and never changes the tree.

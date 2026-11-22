@@ -27,6 +27,7 @@ data class ReadinessInputs(
     val accessibilityHost: Boolean = true,
     /** What the connected accessibility service's configuration does not grant the agent (AccessibilityBridge). */
     val accessibilityGaps: List<String> = emptyList(),
+    val companionStatus: String? = null,
 )
 
 object ReadinessCheck {
@@ -35,7 +36,8 @@ object ReadinessCheck {
             i.providerProblem?.let { add("AI provider not configured: $it") }
             if (!i.accessibilityEnabled) {
                 add(
-                    if (!i.accessibilityHost) AccessibilityEnabler.NO_HOST
+                    if (i.companionStatus != null) i.companionStatus
+                    else if (!i.accessibilityHost) AccessibilityEnabler.NO_HOST
                     else if (i.privilegedAvailable) "Accessibility service is off; ${i.appLabel} will switch it on automatically — or enable it in Settings → Accessibility."
                     else AccessibilityEnabler.manualGuidance(i.appLabel, i.sdkInt),
                 )
@@ -77,6 +79,7 @@ object ReadinessCheck {
     fun setupProblems(r: Readiness): List<String> = r.problems.filterNot { it == SCREEN_OFF || it == DEVICE_LOCKED }
 
     fun unattendedProblem(decision: com.eggman.backstage.exec.TargetDecision, i: ReadinessInputs): String? = when {
+        i.companionStatus != null -> null
         decision.kind == null -> "Not started: ${decision.reason}"
         !i.accessibilityEnabled -> "Not started: the agent cannot see or operate any screen. " +
             (compute(i).problems.firstOrNull { "ccessibility" in it } ?: "Turn on Backstage's accessibility service.")

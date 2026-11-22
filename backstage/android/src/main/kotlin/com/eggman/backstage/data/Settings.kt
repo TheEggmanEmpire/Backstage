@@ -1,5 +1,6 @@
 package com.eggman.backstage.data
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.content.Context
 import android.content.SharedPreferences
 import com.eggman.backstage.agent.api.Target
@@ -376,12 +377,12 @@ class Settings(private val p: KeyValueStore, private val secrets: SecretCipher =
     /** The user accepted the accessibility disclosure (what is read, what is done, where it goes); revocable in Settings. */
     var accessibilityConsent: Boolean get() = p.getBoolean("a11y_consent", false); set(v) = p.putBoolean("a11y_consent", v)
     /** Backstage may switch its accessibility service on by itself: only after the in-app consent, and while auto-enable is on. */
-    val mayAutoEnableAccessibility: Boolean get() = accessibilityConsent && autoEnableAccessibility
+    val mayAutoEnableAccessibility: Boolean get() = !PLAY_DISTRIBUTION && accessibilityConsent && autoEnableAccessibility
     /**
      * Switch the accessibility service off while one of [detectorPackages] is in front, and back on after it left
      * (PayPay's false "unsafe" warning; see DetectorPause). On by default: the cost is a desktop restart per switch.
    */
-    var detectorPause: Boolean get() = p.getBoolean("a11y_pause_detectors", true); set(v) = p.putBoolean("a11y_pause_detectors", v)
+    var detectorPause: Boolean get() = !PLAY_DISTRIBUTION && p.getBoolean("a11y_pause_detectors", true); set(v) = p.putBoolean("a11y_pause_detectors", v)
     /** Re-check interval of a pause in ms; while a detector is still in front the pause is postponed (capped at 60 s). */
     var detectorPauseDelayMs: Int
         get() = p.getInt("a11y_pause_delay_ms", 5000).coerceIn(1000, 60000)
@@ -498,10 +499,11 @@ class Settings(private val p: KeyValueStore, private val secrets: SecretCipher =
 
     // ---- OMP harness -------------------------------------------------------------------------
     var agentEngine: AgentEngine
-        get() = AgentEngine.entries.firstOrNull { it.name == p.getString("agent_engine") } ?: AgentEngine.BACKSTAGE
+        get() = if (PLAY_DISTRIBUTION) AgentEngine.BACKSTAGE
+        else AgentEngine.entries.firstOrNull { it.name == p.getString("agent_engine") } ?: AgentEngine.BACKSTAGE
         set(v) = p.putString("agent_engine", v.name)
 
-    var ompEnabled: Boolean get() = p.getBoolean("omp_enabled", false); set(v) = p.putBoolean("omp_enabled", v)
+    var ompEnabled: Boolean get() = !PLAY_DISTRIBUTION && p.getBoolean("omp_enabled", false); set(v) = p.putBoolean("omp_enabled", v)
     /** Executing bundled skill code is separately opted into; neither ADB Auto nor OMP Auto authorizes it. */
     var skillScriptsEnabled: Boolean get() = p.getBoolean("skill_scripts_enabled", false); set(v) = p.putBoolean("skill_scripts_enabled", v)
     var skillScriptsAutoApprove: Boolean get() = p.getBoolean("skill_scripts_auto_approve", false); set(v) = p.putBoolean("skill_scripts_auto_approve", v)

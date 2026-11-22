@@ -91,23 +91,23 @@ def apply_entries(root, entries):
 
 def bump_release(root, tag):
     upstream = '.'.join(map(str, version(tag)))
-    gradle = root / 'backstage/dextop-integration.gradle'
+    properties = root / 'backstage/version.properties'
     changelog = root / 'CHANGELOG.md'
-    before = gradle.read_text()
-    pattern = r"(def backstageVersion = \(findProperty\('backstage.version'\) \?: ')(" + VERSION + r")('\)\.toString\(\))"
+    before = properties.read_text()
+    pattern = r"(?m)^(version=)(" + VERSION + r")$"
     match = re.search(pattern, before)
     if not match or len(re.findall(pattern, before)) != 1:
         raise ValueError('cannot find the default Backstage version')
     parts = list(version(match[2])); parts[2] += 1
     new = '.'.join(map(str, parts))
-    gradle_text = re.sub(pattern, lambda m: m[1] + new + m[3], before)
+    properties_text = re.sub(pattern, lambda m: m[1] + new, before)
     text = changelog.read_text()
     heading = re.search(r'^## ', text, re.M)
     if not heading:
         raise ValueError('changelog has no version section')
     changelog_text = text[:heading.start()] + f'## {new}\n\nDextop updated to v{upstream}.\n\n' + text[heading.start():]
     # Validate both release metadata edits before writing either file.
-    gradle.write_text(gradle_text); changelog.write_text(changelog_text)
+    properties.write_text(properties_text); changelog.write_text(changelog_text)
     return new
 
 
@@ -212,7 +212,7 @@ def publish(repo, tag, base, archive):
     new = bump_release(ROOT, tag)
     git('config', 'user.name', 'github-actions[bot]')
     git('config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com')
-    git('add', '-A', '-f', '--', *UPDATE_PATHS, 'backstage/dextop-integration.gradle', 'CHANGELOG.md')
+    git('add', '-A', '-f', '--', *UPDATE_PATHS, 'backstage/version.properties', 'CHANGELOG.md')
     git('commit', '-m', f'Dextop updated to {tag}')
     git('tag', '-a', 'v' + new, '-m', f'Dextop {tag} ({pin["UPSTREAM_COMMIT"]})')
     git('tag', marker)

@@ -100,32 +100,52 @@ class CiCacheTest(unittest.TestCase):
 class ReleaseSourcesTest(unittest.TestCase):
     """GPL-3.0 §6 / LGPL-2.1 §6: a release carries the sources of the prebuilt third-party binaries in its APK."""
 
-    def test_release_tag_check_matches_the_built_apk_name(self):
+    def test_release_checks_the_signers_and_checksums_exact_tagged_apks(self):
         steps = load(os.path.join(WORKFLOWS, "build.yml"))["jobs"]["release"]["steps"]
-        step = next(s for s in steps if s.get("name") == "Check the version against the tag")
+        step = next(s for s in steps if s.get("name") == "Verify Play and companion signing and write APK checksums")
         with tempfile.TemporaryDirectory() as directory:
             dist = os.path.join(directory, "dist")
             os.mkdir(dist)
-            apk = os.path.join(dist, "backstage-1.2.3-arm64-v8a-release.apk")
-            with open(apk, "wb"):
-                pass
-            env = {**os.environ, "GITHUB_REF_NAME": "v1.2.3"}
-            match = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=directory, env=env,
-                                   capture_output=True, text=True)
-            self.assertEqual(0, match.returncode, match.stderr)
-            self.assertNotIn("::warning::", match.stdout)
-            os.rename(apk, os.path.join(dist, "backstage-1.2.2-arm64-v8a-release.apk"))
-            mismatch = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=directory, env=env,
-                                      capture_output=True, text=True)
-            self.assertIn("::warning::", mismatch.stdout)
+            assets = ["backstage-1.2.3-arm64-v8a-release.apk", "backstage-play-1.2.3-arm64-v8a-release.apk",
+                      "backstage-play-agent-1.2.3-release.apk"]
+            for name in assets:
+                with open(os.path.join(dist, name), "w") as apk:
+                    apk.write(name)
+            sdk = os.path.join(directory, "android")
+            tools = os.path.join(sdk, "build-tools", "36.0.0")
+            os.makedirs(tools)
+            signer = os.path.join(tools, "apksigner")
+            digest = "ab" * 32
+            with open(signer, "w") as script:
+                script.write(f'#!/usr/bin/env bash\ntest -f "$3" && echo "Signer #1 certificate SHA-256 digest: {digest}"\n')
+            os.chmod(signer, 0o755)
+            env = {**os.environ, "GITHUB_REF_NAME": "v1.2.3", "ANDROID_HOME": sdk,
+                   "BACKSTAGE_EXPECT_CERT_SHA256": digest}
 
-    def test_release_attaches_only_the_apk_and_its_hash(self):
+            def verify():
+                return subprocess.run(["bash", "-e", "-c", step["run"]], cwd=directory, env=env,
+                                      capture_output=True, text=True)
+
+            match = verify()
+            self.assertEqual(0, match.returncode, match.stderr)
+            with open(os.path.join(dist, "SHA256SUMS")) as checksums:
+                self.assertEqual(assets, [line.strip().split("  ")[1] for line in checksums])
+            env["BACKSTAGE_EXPECT_CERT_SHA256"] = "cd" * 32
+            self.assertIn("signed with an unexpected certificate", verify().stdout)
+            env["BACKSTAGE_EXPECT_CERT_SHA256"] = digest
+            os.rename(os.path.join(dist, assets[0]), os.path.join(dist, assets[0].replace("1.2.3", "1.2.2")))
+            self.assertNotEqual(0, verify().returncode)
+
+    def test_release_attaches_apks_and_uploads_the_bundle_as_a_workflow_artifact(self):
         steps = load(os.path.join(WORKFLOWS, "build.yml"))["jobs"]["release"]["steps"]
         runs = [str(s.get("run", "")) for s in steps]
         self.assertFalse(any("fetch-third-party-sources.sh" in r for r in runs), "no source archives in releases")
         publish = next(s for s in steps if str(s.get("uses", "")).startswith("softprops/action-gh-release"))
         files = [f.strip() for f in publish["with"]["files"].splitlines() if f.strip()]
         self.assertEqual(["dist/*.apk", "dist/SHA256SUMS"], files)
+        bundle = next(s for s in steps if s.get("name") == "Upload the Play AAB")
+        self.assertTrue(bundle["uses"].startswith("actions/upload-artifact@"))
+        self.assertEqual("dist/backstage-play-*-release.aab", bundle["with"]["path"])
         self.assertTrue(publish["with"]["fail_on_unmatched_files"])
         self.assertIn("release-notes.md", publish["with"]["body_path"])
 

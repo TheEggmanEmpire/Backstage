@@ -1,5 +1,6 @@
 package com.eggman.backstage.agent
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.agent.api.AgentController
 import com.eggman.backstage.agent.api.AgentState
 import com.eggman.backstage.agent.api.PendingQuestion
@@ -141,7 +142,9 @@ class AgentControllerImpl(
 
     /** Same approval channel as confirm_action, serialized with agent tasks; no model or device UI tools. */
     /** Called when settings change so the next omp-engine task restarts with fresh provider/model config. */
-    fun invalidateOmpEngine() = ompEngine.invalidate()
+    fun invalidateOmpEngine() {
+        if (!PLAY_DISTRIBUTION) ompEngine.invalidate()
+    }
 
     suspend fun confirmExternalAction(action: String): Boolean {
         val q = Queued(UUID.randomUUID().toString(), TaskRequest("Termux shell approval", Source.MCP),
@@ -549,8 +552,8 @@ class AgentControllerImpl(
                     }.getOrNull().orEmpty(),
                     defaultApps = defaultAppsAsync.await(),
                     skills = skillsAsync.await(),
-                    ompHint = com.eggman.backstage.omp.OmpHarness.startUnavailableReason() ?: "Ready; omp_subagent, omp_subagent_status and omp_subagent_cancel are available.",
-                    desktopShortcuts = if (!hostPresent) "" else runCatching {
+                    ompHint = if (PLAY_DISTRIBUTION) "" else com.eggman.backstage.omp.OmpHarness.startUnavailableReason() ?: "Ready; omp_subagent, omp_subagent_status and omp_subagent_cancel are available.",
+                    desktopShortcuts = if (PLAY_DISTRIBUTION || !hostPresent) "" else runCatching {
                         com.eggman.backstage.exec.DesktopShortcuts.promptLine(com.eggman.backstage.tools.desktopShortcutEnv(env.services.desktop))
                     }.getOrDefault(""),
                 ),
@@ -721,7 +724,7 @@ class AgentControllerImpl(
                         loop.run(conv.messages)
                     }
                 } else {
-                    ompEngine.close()
+                    if (!PLAY_DISTRIBUTION) ompEngine.close()
                     loop.run(conv.messages)
                 }
             }

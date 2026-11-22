@@ -18,21 +18,24 @@ import java.security.KeyStore
 import java.security.MessageDigest
 
 // ---------------------------------------------------------------------------------------------- constants
-def backstageVersion = (findProperty('backstage.version') ?: '1.0.1').toString()
+if (!gradle.ext.has('backstageRoot')) {
+    throw new GradleException('Backstage: backstage/dextop-settings.gradle was not applied (run scripts/prepare-work-tree.sh)')
+}
+def backstageRoot = new File(gradle.ext.backstageRoot.toString()).canonicalFile
+def versionProperties = new Properties()
+new File(backstageRoot, 'backstage/version.properties').withInputStream { versionProperties.load(it) }
+def backstageVersion = (findProperty('backstage.version') ?: versionProperties.getProperty('version')).toString()
 // Release tags must match the configured version so installed apps can identify newer releases.
 // GitHub Actions sets GITHUB_REF_TYPE/GITHUB_REF_NAME; other builds are not affected.
 def releaseTag = System.getenv('GITHUB_REF_TYPE') == 'tag' ? (System.getenv('GITHUB_REF_NAME') ?: '') : ''
 if (releaseTag ==~ /v\d.*/ && releaseTag.substring(1) != backstageVersion) {
     throw new GradleException("Backstage: tag ${releaseTag} does not match the backstage version ${backstageVersion}. " +
-            "Set the default version above in backstage/dextop-integration.gradle and tag that commit, or pass " +
+            "Set the default version in backstage/version.properties and tag that commit, or pass " +
             "-Pbackstage.version=${releaseTag.substring(1)}.")
 }
 def backstageApplicationId = 'com.eggman.backstage'
-if (!gradle.ext.has('backstageRoot')) {
-    throw new GradleException('Backstage: backstage/dextop-settings.gradle was not applied (run scripts/prepare-work-tree.sh)')
-}
-def backstageRoot = new File(gradle.ext.backstageRoot.toString()).canonicalFile
 def overlayDir = new File(backstageRoot, 'backstage/overlay')
+def playOverlayDir = new File(backstageRoot, 'backstage/overlay-play')
 def glueDir = new File(backstageRoot, 'backstage/dextop-glue/kotlin')
 def ompAssetsDir = new File(backstageRoot, 'build/omp-payload/assets')
 def ompManifest = new File(ompAssetsDir, 'omp/manifest.json')
@@ -145,6 +148,10 @@ android {
             if (glueDir.isDirectory()) java.srcDir(glueDir)
         }
         // Upstream regenerates main/res strings on every build, so the label override lives in the flavor.
+        play {
+            res.srcDir(new File(playOverlayDir, 'res'))
+            manifest.srcFile(new File(playOverlayDir, 'AndroidManifest.play.xml'))
+        }
         github {
             if (!skipOmpPayload && ompPayloadReady) assets.srcDir(ompAssetsDir)
             res.srcDir(new File(overlayDir, 'res'))
@@ -167,7 +174,18 @@ android {
     }
 
     productFlavors {
+        play {
+            applicationId = "${backstageApplicationId}.play"
+            versionName = backstageVersionName
+            versionCode = backstageVersionCode + 1
+            targetSdk = Math.max(36, flutter.targetSdkVersion as int)
+            buildConfigField 'String', 'BACKSTAGE_VERSION', "\"${backstageVersionName}\""
+            buildConfigField 'String', 'CAR_COMPANION_PACKAGE', "\"${applicationId}.cardex\""
+            buildConfigField 'String', 'CAR_COMPANION_DRIVING_PACKAGE', "\"${applicationId}.cardex.driving\""
+            proguardFile new File(playOverlayDir, 'proguard-rules.pro')
+        }
         github {
+            proguardFile new File(overlayDir, 'proguard-rules.pro')
             applicationId = backstageApplicationId
             versionName = backstageVersionName
             versionCode = backstageVersionCode
@@ -182,7 +200,6 @@ android {
         }
         release {
             buildConfigField 'String', 'CAR_COMPANION_CERTIFICATES', "\"${releaseCertificate}\""
-            proguardFile new File(overlayDir, 'proguard-rules.pro')
         }
     }
 }
@@ -216,10 +233,10 @@ tasks.matching { it.name ==~ /mergeGithub(Debug|Release|Profile)Assets/ }.config
     }
 }
 
-// Build only the upstream GitHub variant.
+// Build the Backstage distributions.
 androidComponents {
     beforeVariants(selector().all()) { variantBuilder ->
-        if (!variantBuilder.productFlavors.any { it.second == 'github' }) variantBuilder.enable = false
+        if (!variantBuilder.productFlavors.any { it.second in ['github', 'play'] }) variantBuilder.enable = false
     }
 }
 

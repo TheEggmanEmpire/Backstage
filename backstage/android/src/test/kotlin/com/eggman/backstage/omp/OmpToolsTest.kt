@@ -1,5 +1,6 @@
 package com.eggman.backstage.omp
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.tools.*
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -53,7 +54,9 @@ class OmpToolsTest {
         assertTrue(run(tool("Install OMP first"), hooks).text.contains("Install OMP"))
         assertTrue(hooks.asked.isEmpty())
         val registry = ToolRegistry.default()
-        listOf("omp_subagent", "omp_subagent_status", "omp_subagent_cancel").forEach { assertTrue(registry[it]!!.mutating) }
+        listOf("omp_subagent", "omp_subagent_status", "omp_subagent_cancel").forEach {
+            if (PLAY_DISTRIBUTION) assertNull(registry[it]) else assertTrue(registry[it]!!.mutating)
+        }
         assertFalse(registry.forAgent(ToolRegistry.Availability(false, overlay = false)).any { it.name.startsWith("omp_") })
     }
 }

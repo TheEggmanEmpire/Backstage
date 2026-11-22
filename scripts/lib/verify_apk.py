@@ -351,8 +351,8 @@ def check_signing(rep, apksigner, apk, release):
 def expected_version(root):
     """versionName/versionCode that backstage/dextop-integration.gradle derives from the repository."""
     try:
-        gradle = read_text(os.path.join(root, "backstage/dextop-integration.gradle"))
-        backstage = re.search(r"findProperty\('backstage\.version'\)\s*\?:\s*'([^']+)'", gradle).group(1)
+        properties = read_text(os.path.join(root, "backstage/version.properties"))
+        backstage = re.search(r"^version=([^\s]+)$", properties, re.M).group(1)
         pubspec = read_text(os.path.join(root, "upstream/dextop/pubspec.yaml"))
         up = re.search(r"^version:\s*([^\s#]+)", pubspec, re.M).group(1)
     except (OSError, AttributeError):

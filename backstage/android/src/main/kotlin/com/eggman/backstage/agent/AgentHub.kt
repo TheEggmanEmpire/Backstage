@@ -1,5 +1,6 @@
 package com.eggman.backstage.agent
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.graphics.Bitmap
 import com.eggman.backstage.agent.api.Source
 import com.eggman.backstage.agent.api.TaskRequest
@@ -48,7 +49,11 @@ data class LegacyAgentState(
 
 /** Frame source shim for the prototype's live preview. */
 class LegacyFrames {
-    suspend fun capture(): Bitmap? = runCatching { DesktopHosts.current?.captureFrame() }.getOrNull()
+    suspend fun capture(): Bitmap? = if (PLAY_DISTRIBUTION) {
+            DesktopHosts.current?.geometry()?.displayId?.let {
+                com.eggman.backstage.a11y.AgentAccessibility.instance?.screenshot(it)
+            }
+        } else runCatching { DesktopHosts.current?.captureFrame() }.getOrNull()
 }
 
 class LegacyDevice(private val exec: Executor) {

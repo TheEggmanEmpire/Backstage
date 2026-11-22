@@ -95,7 +95,7 @@ internal object UpdateInstaller {
                 repo.change { it.copy(phase = UpdatePhase.PENDING, message = "Waiting for Android installation approval.") }
                 session.commit(pending.intentSender)
             }
-            // PackageInstaller now owns its copy; neither confirmation nor process death needs our large file.
+            // PackageInstaller owns its copy during confirmation and across process death.
             repo.apk.delete()
         } catch (error: Exception) {
             runCatching { installer.abandonSession(id) }
@@ -163,7 +163,7 @@ class UpdateStatusReceiver : BroadcastReceiver() {
                 repo.change { it.copy(phase = UpdatePhase.PENDING, message = "Confirm the update in Android's installer.") }
                 UpdateConfirmationActivity.pending = pending
                 UpdateNotifications.notice(context, "Tap to confirm installation in Android.", pending)
-                // An already visible Agent UI can show it now. Background completion stays in a notification.
+                // A visible Agent UI can show the result. Background completion uses a notification.
                 if (com.eggman.backstage.notify.TaskNotifier.appVisible) runCatching { pending.send() }
             }
             else -> {

@@ -1,5 +1,7 @@
 //:backstage — the Backstage AI agent as an Android library.
 // No plugin versions here: they come from the including build (Dextop or backstage/ standalone).
+import java.net.URI
+
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
@@ -14,6 +16,30 @@ android {
         minSdk = 33
         consumerProguardFiles("consumer-rules.pro")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            buildConfigField("boolean", "PLAY_DISTRIBUTION", "false")
+        }
+        create("play") {
+            dimension = "distribution"
+            buildConfigField("boolean", "PLAY_DISTRIBUTION", "true")
+            val reportEndpoint = providers.environmentVariable("BACKSTAGE_PLAY_REPORT_ENDPOINT").orElse("").get()
+            if (reportEndpoint.isNotBlank()) {
+                val endpoint = URI(reportEndpoint)
+                require(endpoint.scheme == "https" && endpoint.host != null && endpoint.userInfo == null &&
+                    endpoint.fragment == null && endpoint.query == null) {
+                    "The Play report endpoint must be a public HTTPS URL"
+                }
+            }
+            buildConfigField("String", "PLAY_REPORT_ENDPOINT", "\"$reportEndpoint\"")
+        }
+    }
+    sourceSets["play"].apply {
+        java.srcDir("../companion-protocol/kotlin")
+        aidl.srcDir("../companion-protocol/aidl")
     }
     buildFeatures {
         compose = true

@@ -94,6 +94,8 @@ Android 13+, arm64.
 6. Give the agent tasks in the Backstage app or from its notification.
 7. Optional: add skills, instructions and MCP servers for the agent.
 
+Each release also includes the Google Play build and **Backstage-play-agent**, which provides optional accessibility screen control.
+
 ## Compatibility
 
 | Environment | Status | Notes |

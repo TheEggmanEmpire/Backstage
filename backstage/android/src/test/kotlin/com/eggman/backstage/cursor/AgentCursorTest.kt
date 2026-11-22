@@ -1,5 +1,6 @@
 package com.eggman.backstage.cursor
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.graphics.Bitmap
 import com.eggman.backstage.exec.DesktopExecutor
 import com.eggman.backstage.host.DesktopHost
@@ -119,11 +120,15 @@ class AgentCursorTest {
         exec.tap(100f, 100f)
         log.clear()
         assertNull(exec.screenshot())
-        assertEquals(listOf("hide 7", "capture", "restore 7"), log)
-        // No cursor on screen (or on another display): nothing to hide.
-        AgentCursor.hide()
-        log.clear()
-        exec.screenshot()
-        assertEquals(listOf("capture"), log.filterNot { it.startsWith("render") })
+        if (PLAY_DISTRIBUTION) {
+            assertEquals(listOf("hide 7", "restore 7"), log)
+        } else {
+            assertEquals(listOf("hide 7", "capture", "restore 7"), log)
+            // No cursor on screen (or on another display): nothing to hide.
+            AgentCursor.hide()
+            log.clear()
+            exec.screenshot()
+            assertEquals(listOf("capture"), log.filterNot { it.startsWith("render") })
+        }
     }
 }

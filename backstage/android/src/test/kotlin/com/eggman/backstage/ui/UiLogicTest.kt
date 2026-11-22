@@ -1,5 +1,6 @@
 package com.eggman.backstage.ui
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.agent.api.AgentState
 import com.eggman.backstage.agent.api.PendingQuestion
 import com.eggman.backstage.agent.api.PlanStep
@@ -158,10 +159,12 @@ class UiLogicTest {
         assertEquals(1, ProviderOptions.validate(claude, "", "m", "https://a").size)
         assertTrue(ProviderOptions.validate(claude, "k", "m", "https://a").isEmpty())
         assertEquals(1, ProviderOptions.validate(claude, "k", "m", "http://api.example.com").size)
-        assertTrue(ProviderOptions.validate(claude, "k", "m", "http://192.168.1.5:8080/v1").isEmpty())
+        val localEndpointErrors = if (PLAY_DISTRIBUTION) listOf("Enter an HTTPS endpoint.") else emptyList()
+        assertEquals(localEndpointErrors, ProviderOptions.validate(claude, "k", "m", "http://192.168.1.5:8080/v1"))
         assertEquals(1, ProviderOptions.validate(claude, "k", "m", "ftp://x").size)
         val ollama = ProviderOptions.byId("OLLAMA")!!
-        assertTrue(ProviderOptions.validate(ollama, "", "qwen", "http://10.0.0.2:11434/v1").isEmpty())
+        assertEquals(localEndpointErrors, ProviderOptions.validate(ollama, "", "qwen", "http://10.0.0.2:11434/v1"))
+        assertTrue(ProviderOptions.validate(ollama, "", "qwen", "https://ollama.example.test/v1").isEmpty())
         assertEquals(com.eggman.backstage.data.Provider.entries.size, ProviderOptions.all.size)
         assertNull(ProviderOptions.byId("X"))
     }

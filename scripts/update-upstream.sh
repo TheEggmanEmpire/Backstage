@@ -79,7 +79,7 @@ version_line() {  # new upstream version -> one bullet (versionCode = backstage*
   local ob nb; ob=$(build_number "$OLD_VERSION") nb=$(build_number "$1")
   if [ -n "$ob" ] && [ -n "$nb" ] && [ $((nb % 1000)) -lt $((ob % 1000)) ]; then
     echo "- **versionCode check: upstream build $ob -> $nb lowers the Backstage versionCode** unless the Backstage" \
-         "version in backstage/dextop-integration.gradle goes up with this bump (otherwise the APK installs as a downgrade)"
+         "version in backstage/version.properties goes up with this bump (otherwise the APK installs as a downgrade)"
   else
     echo "- versionCode check: upstream build ${ob:-?} -> ${nb:-?}; bump the Backstage version for the next release anyway"
   fi

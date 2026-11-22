@@ -1,5 +1,6 @@
 package com.eggman.backstage.agent
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.agent.api.PlanStep
 import com.eggman.backstage.exec.Executor
 import com.eggman.backstage.exec.TargetKind
@@ -224,7 +225,8 @@ class AgentLoopTest {
         ))
         val out = smsLoop(llm, user, dc).run(mutableListOf(Message.user("text Anna I'm running late")))
         assertTrue(out.success)
-        assertEquals(listOf("irreversible:Send an SMS to +49 170 1234567: “Running late”"), user.asked)
+        val action = if (PLAY_DISTRIBUTION) "Prepare an SMS draft" else "Send an SMS"
+        assertEquals(listOf("irreversible:$action to +49 170 1234567: “Running late”"), user.asked)
         assertEquals(listOf("sms +49 170 1234567 Running late"), dc.calls)
     }
 

@@ -1,5 +1,6 @@
 package com.eggman.backstage.ui.report
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.content.ActivityNotFoundException
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -68,7 +69,7 @@ fun ReportableAiResponse(response: String, taskId: String?, content: @Composable
             })
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Copy") }, onClick = { menu = false; com.eggman.backstage.ui.chat.ChatExport.copy(context, response) })
-            DropdownMenuItem(text = { Text("Report response") }, onClick = { menu = false; error = null; drafting = true })
+            DropdownMenuItem(text = { Text(if (PLAY_DISTRIBUTION) "Report this AI response" else "Report response") }, onClick = { menu = false; error = null; drafting = true })
             DropdownMenuItem(text = { Text("Saved reports") }, onClick = { menu = false; history = true })
         }
     }
@@ -181,10 +182,11 @@ private fun ReportDetailsDialog(report: AiContentReport, store: AiReportStore, o
         ReportDestinationsDialog(destinations, store, onDismiss = { editing = false }, onSaved = { destinations = it; editing = false })
         return
     }
-    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text("Saved on this device") }, text = {
+    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text(if (PLAY_DISTRIBUTION) "AI response report" else "Saved on this device") }, text = {
         Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("This flag has not been submitted. The exact text below is shared only when you choose a destination and send it there.")
+            Text(if (PLAY_DISTRIBUTION) "Review the response, category and note below before sending. These fields can contain personal information." else "This flag has not been submitted. The exact text below is shared only when you choose a destination and send it there.")
             SelectionContainer { Text(report.shareText(), style = MaterialTheme.typography.bodySmall) }
+            if (PLAY_DISTRIBUTION) DeveloperReportButton(report, busy, { busy = it }, { error = it })
             TextButton(onClick = { share() }, enabled = !busy) { Text("Share report") }
             if (destinations.maintainer.isNotEmpty()) TextButton(onClick = { share(destinations.maintainer) }, enabled = !busy) {
                 Text("Email maintainer (${destinations.maintainer})")

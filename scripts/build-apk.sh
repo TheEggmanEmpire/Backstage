@@ -1,38 +1,44 @@
 #!/usr/bin/env bash
-# Build the Backstage APK into dist/.
+# Build Backstage release or debug artifacts into dist/.
 #
-#   scripts/build-apk.sh [debug|release] [--no-prepare]
+#   scripts/build-apk.sh [debug|release] [--flavor github|play|companion] [--no-prepare]
 #
-# Dextop's Car Companion (:cardex) is not built.
-#
-# debug  : flutter build apk --flavor github --debug (all ABIs, like upstream CI; set
-#           BACKSTAGE_TARGET_PLATFORM=android-arm64 to build arm64 only)
-# release: flutter build apk --flavor github --release --target-platform android-arm64, R8 on.
-#           Signed with BACKSTAGE_KEYSTORE / BACKSTAGE_KEYSTORE_PASSWORD / BACKSTAGE_KEY_ALIAS /
-#           BACKSTAGE_KEY_PASSWORD; with none of them the DEBUG key is used and a warning is printed
-#           (some but not all of them set is an error).
-#           Refuses a checkout with uncommitted or untracked files (the APK names its source commit);
-#           BACKSTAGE_ALLOW_DIRTY=1 overrides that for local test builds.
-# Outputs: dist/backstage-<version>-debug.apk | dist/backstage-<version>-arm64-v8a-release.apk
-#           dist/SHA256SUMS (only this run's file)
-#      <version> = versionName with '+' replaced by '_' (e.g. ): no '+' in asset names.
-# GitHub embeds the pinned OMP runtime (scripts/fetch-omp-payload.sh,.cache/omp).
-# BACKSTAGE_SKIP_OMP=1 skips it for debug only (OMP is unavailable in that APK); releases always include it.
+# github (default): APK with the pinned OMP runtime. BACKSTAGE_SKIP_OMP=1 skips it for debug.
+# play: APK and, in release mode, an AAB. Release APKs target arm64.
+# companion: APK for the separate Backstage Agent app.
+# Release signing uses BACKSTAGE_KEYSTORE, BACKSTAGE_KEYSTORE_PASSWORD, BACKSTAGE_KEY_ALIAS and
+# BACKSTAGE_KEY_PASSWORD. Set all four, or omit all four for a debug-signed local test build.
+# BACKSTAGE_ALLOW_DIRTY=1 permits local release builds from a modified checkout.
+# SHA256SUMS lists the artifacts produced by this run. BACKSTAGE_WRITE_SHA256SUMS=0 leaves it to the caller.
 # Heavy steps are serialised through $BACKSTAGE_BUILD_LOCK (a flock file) when it is set.
 . "$(dirname "$0")/lib.sh"
 
 type=debug
+flavor=github
 prepare=true
 while (($#)); do
   case "$1" in
     debug|release) type="$1"; shift ;;
+    --flavor)
+      (($# >= 2)) || die "--flavor requires github, play or companion"
+      flavor=$2
+      shift 2 ;;
     --no-prepare) prepare=false; shift ;;
     -h|--help) awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
 done
-[[ "${BACKSTAGE_SKIP_OMP:-0}" != 1 || "$type" == debug ]] || die "BACKSTAGE_SKIP_OMP=1 is debug only"
+case "$flavor" in github|play|companion) ;; *) die "unknown flavor $flavor" ;; esac
+if [[ "$flavor" == github && "${BACKSTAGE_SKIP_OMP:-0}" == 1 && "$type" != debug ]]; then
+  die "BACKSTAGE_SKIP_OMP=1 is debug only"
+fi
 start=$SECONDS
+
+write_checksums() {
+  if [[ "${BACKSTAGE_WRITE_SHA256SUMS:-1}" != 0 ]]; then
+    (cd "$DIST" && sha256sum -- "$@" >SHA256SUMS)
+  fi
+}
 
 # A release's Corresponding Source (GPL-3.0 §6) is this repository at the commit it is built from (NOTICE.md), and
 # the APK records that commit (assets/backstage/THIRD_PARTY_NOTICES.txt, BuildConfig.SOURCE_REVISION). Uncommitted
@@ -51,10 +57,12 @@ if [[ "$type" == release ]]; then
 fi
 setup_toolchain_env
 
-if $prepare; then
-  "$ROOT/scripts/prepare-work-tree.sh" --mode "$type" >/dev/null || die "scripts/prepare-work-tree.sh failed"
+if [[ "$flavor" != companion ]]; then
+  if $prepare; then
+    "$ROOT/scripts/prepare-work-tree.sh" --mode "$type" >/dev/null || die "scripts/prepare-work-tree.sh failed"
+  fi
+  require_prepared
 fi
-require_prepared
 
 # ------------------------------------------------------------------------------------------ signing
 # Upstream's own Gradle guard refuses to package release builds without DEXTOP_* signing values
@@ -71,6 +79,7 @@ if [[ "$type" == release ]]; then
   fi
   if [[ -n "${BACKSTAGE_KEYSTORE:-}" && -n "${BACKSTAGE_KEYSTORE_PASSWORD:-}" && -n "${BACKSTAGE_KEY_ALIAS:-}" && -n "${BACKSTAGE_KEY_PASSWORD:-}" ]]; then
     [[ -f "$BACKSTAGE_KEYSTORE" ]] || die "configured release keystore does not exist"
+    BACKSTAGE_KEYSTORE="$(readlink -f "$BACKSTAGE_KEYSTORE")"
     export BACKSTAGE_KEYSTORE BACKSTAGE_KEYSTORE_PASSWORD BACKSTAGE_KEY_ALIAS BACKSTAGE_KEY_PASSWORD
     export DEXTOP_KEYSTORE_FILE="$(relative_to_work "$(readlink -f "$BACKSTAGE_KEYSTORE")")"
     export DEXTOP_STORE_PASSWORD="$BACKSTAGE_KEYSTORE_PASSWORD" DEXTOP_KEY_ALIAS="$BACKSTAGE_KEY_ALIAS" \
@@ -93,17 +102,51 @@ if [[ "$type" == release ]]; then
 fi
 
 # ------------------------------------------------------------------------------------------- build
-if [[ "${BACKSTAGE_SKIP_OMP:-0}" == 1 ]]; then
-  warn "BACKSTAGE_SKIP_OMP=1: debug APK will not include the OMP runtime"
-else
-  "$ROOT/scripts/fetch-omp-payload.sh"
+if [[ "$flavor" == companion ]]; then
+  task=assembleDebug
+  [[ "$type" != release ]] || task=assembleRelease
+  gradle_args=()
+  for arg in ${BACKSTAGE_GRADLE_PROJECT_ARGS:-}; do
+    gradle_args+=("-P$arg")
+  done
+  (
+    cd "$ROOT/backstage"
+    heavy ./gradlew --console=plain ":companion:$task" "${gradle_args[@]}"
+    ./gradlew --stop >/dev/null
+  )
+  outputs="$ROOT/backstage/companion/build/outputs/apk/$type"
+  readarray -t artifact < <(python3 - "$outputs/output-metadata.json" <<'PYCODE'
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as metadata:
+    output, = json.load(metadata)["elements"]
+print(output["outputFile"])
+print(output["versionName"])
+PYCODE
+  )
+  [[ ${#artifact[@]} -eq 2 ]] || die "invalid companion APK metadata"
+  mkdir -p "$DIST"
+  version_name="${artifact[1]//+/_}"
+  out="backstage-play-agent-$version_name-$type.apk"
+  cp "$outputs/${artifact[0]}" "$DIST/$out"
+  write_checksums "$out"
+  log "wrote dist/$out; total $((SECONDS - start))s"
+  exit 0
+fi
+
+if [[ "$flavor" == github ]]; then
+  if [[ "${BACKSTAGE_SKIP_OMP:-0}" == 1 ]]; then
+    warn "BACKSTAGE_SKIP_OMP=1: debug APK will not include the OMP runtime"
+  else
+    "$ROOT/scripts/fetch-omp-payload.sh"
+  fi
 fi
 cd "$WORK"
 flutter config --no-analytics >/dev/null 2>&1 || true
 log "flutter pub get"
 flutter pub get >/dev/null
-flutter_args=(build apk --flavor github "--$type" --dart-define=DISTRIBUTION_CHANNEL=github)
-if [[ "${BACKSTAGE_SKIP_OMP:-0}" == 1 ]]; then
+flutter_args=(--flavor "$flavor" "--$type" "--dart-define=DISTRIBUTION_CHANNEL=$flavor")
+if [[ "$flavor" == github && "${BACKSTAGE_SKIP_OMP:-0}" == 1 ]]; then
   flutter_args+=(--android-project-arg=backstage.skipOmp=true)
 fi
 # Extra Gradle project properties (space-separated name=value), forwarded explicitly because dotted
@@ -112,34 +155,53 @@ fi
 for arg in ${BACKSTAGE_GRADLE_PROJECT_ARGS:-}; do
   flutter_args+=("--android-project-arg=$arg")
 done
+target_platform="${BACKSTAGE_TARGET_PLATFORM:-android-arm64}"
 if [[ "$type" == release ]]; then
-  flutter_args+=(--target-platform "${BACKSTAGE_TARGET_PLATFORM:-android-arm64}")
+  [[ "$flavor" != play ]] || target_platform=android-arm64
+  flutter_args+=(--target-platform "$target_platform")
 elif [[ -n "${BACKSTAGE_TARGET_PLATFORM:-}" ]]; then
   flutter_args+=(--target-platform "$BACKSTAGE_TARGET_PLATFORM")
 fi
-log "flutter ${flutter_args[*]}"
 app_start=$SECONDS
-heavy flutter "${flutter_args[@]}"
+if [[ "$flavor" == play && "$type" == release ]]; then
+  log "flutter build appbundle ${flutter_args[*]}"
+  heavy flutter build appbundle "${flutter_args[@]}"
+  (cd android && ./gradlew --stop >/dev/null)
+  "$ROOT/backstage/gradlew" --stop
+  free -g
+fi
+log "flutter build apk ${flutter_args[*]}"
+heavy flutter build apk "${flutter_args[@]}"
 log "app build took $((SECONDS - app_start))s"
 
 (cd android && ./gradlew --stop >/dev/null 2>&1) || true
 
 # ------------------------------------------------------------------------------------------ outputs
-metadata="$WORK/build/app/outputs/apk/github/$type/output-metadata.json"
+metadata="$WORK/build/app/outputs/apk/$flavor/$type/output-metadata.json"
 [[ -f "$metadata" ]] || die "missing $metadata"
 version_name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["elements"][0]["versionName"])' "$metadata")"
 version_name="${version_name//+/_}"
 mkdir -p "$DIST"
-apk="$WORK/build/app/outputs/flutter-apk/app-github-$type.apk"
+apk="$WORK/build/app/outputs/flutter-apk/app-$flavor-$type.apk"
 [[ -f "$apk" ]] || die "missing $apk"
+prefix=backstage
+[[ "$flavor" != play ]] || prefix=backstage-play
 if [[ "$type" == release ]]; then
-  abi="${BACKSTAGE_TARGET_PLATFORM:-android-arm64}"; abi="${abi#android-}"; [[ "$abi" == arm64 ]] && abi=arm64-v8a
-  out="$DIST/backstage-$version_name-$abi-release.apk"
+  abi="${target_platform#android-}"; [[ "$abi" == arm64 ]] && abi=arm64-v8a
+  out="$DIST/$prefix-$version_name-$abi-release.apk"
 else
-  out="$DIST/backstage-$version_name-debug.apk"
+  out="$DIST/$prefix-$version_name-debug.apk"
 fi
 cp "$apk" "$out"
 produced=("$(basename "$out")")
 log "wrote ${out#$ROOT/}"
-(cd "$DIST" && sha256sum -- "${produced[@]}" >SHA256SUMS)
-log "dist/SHA256SUMS lists this run's ${#produced[@]} file(s); total $((SECONDS - start))s"
+if [[ "$flavor" == play && "$type" == release ]]; then
+  bundle="$WORK/build/app/outputs/bundle/playRelease/app-play-release.aab"
+  [[ -f "$bundle" ]] || die "missing $bundle"
+  bundle_name="$prefix-$version_name-release.aab"
+  cp "$bundle" "$DIST/$bundle_name"
+  produced+=("$bundle_name")
+  log "wrote dist/$bundle_name"
+fi
+write_checksums "${produced[@]}"
+log "wrote ${#produced[@]} artifact(s); total $((SECONDS - start))s"

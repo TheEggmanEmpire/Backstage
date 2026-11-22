@@ -1,5 +1,6 @@
 package com.eggman.backstage.robolectric
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.accessibilityservice.AccessibilityService
 import android.app.Application
 import android.graphics.Rect
@@ -191,15 +192,22 @@ class AccessibilityExecutorsRobolectricTest {
         // Full screen: injected input first, the node is left alone.
         host.presentation = DesktopHost.Presentation.FULL
         assertTrue(exec.clickElement(fab, long = false).ok)
-        assertEquals("tap ${fab.centerX.toFloat()},${fab.centerY.toFloat()}", host.calls.last())
-        assertEquals(1, A11yTrees.actions(desk.fab).size)
+        if (PLAY_DISTRIBUTION) {
+            assertTrue(host.calls.none { it.startsWith("tap") })
+            assertTrue(shadowService.gesturesDispatched.any { it.description().displayId == 7 } ||
+                A11yTrees.actions(desk.fab).size == 2)
+        } else {
+            assertEquals("tap ${fab.centerX.toFloat()},${fab.centerY.toFloat()}", host.calls.last())
+            assertEquals(1, A11yTrees.actions(desk.fab).size)
+        }
 
         // Text goes through SET_TEXT on the desktop field; keys and launches through the host.
         val search = exec.screen().elements.single { it.editable }
         assertTrue(exec.setText(search, "quarterly report").ok)
         assertTrue(A11yTrees.actions(desk.search).contains(AccessibilityNodeInfo.ACTION_SET_TEXT))
-        assertTrue(exec.key("back").ok)
-        assertEquals("global back", host.calls.last())
+        assertEquals(!PLAY_DISTRIBUTION, exec.key("back").ok)
+        if (PLAY_DISTRIBUTION) assertTrue(host.calls.none { it.startsWith("global") })
+        else assertEquals("global back", host.calls.last())
         assertTrue(exec.launchApp("org.example.desktopmail", "left", null).ok)
         assertEquals("launchAt org.example.desktopmail left", host.calls.last())
         // Gestures never went to the phone's display.

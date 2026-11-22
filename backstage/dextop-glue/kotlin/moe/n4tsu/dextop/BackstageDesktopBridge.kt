@@ -191,7 +191,7 @@ object BackstageDesktopBridge : DesktopHost, DesktopHostExtras {
         }
         // The app's ONE accessibility service: MirrorService also serves the agent (patches/0001 hands over its
         // connection, every event and its disconnection; the library's AccessibilityBridge does the rest).
-        BackstageAccessibilityClient.register(context)
+        if (BuildConfig.DISTRIBUTION_CHANNEL == "github") BackstageAccessibilityClient.register(context)
         DesktopHosts.current = this
     }
 

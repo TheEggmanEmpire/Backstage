@@ -1,5 +1,6 @@
 package com.eggman.backstage.robolectric
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.app.Application
 import android.graphics.Rect
 import com.eggman.backstage.a11y.AgentAccessibility
@@ -9,6 +10,8 @@ import com.eggman.backstage.host.DesktopHost
 import com.eggman.backstage.robolectric.A11yTrees.node
 import com.eggman.backstage.robolectric.A11yTrees.window
 import com.eggman.backstage.testutil.FakeDesktopHost
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -78,7 +81,13 @@ class RecentsGuardRobolectricTest {
         val exec = exec(host)
         val whatsapp = exec.screen().elements.single { it.label == "WhatsApp" }
         assertTrue(exec.clickElement(whatsapp, long = false).ok)
-        assertEquals("tap ${whatsapp.centerX.toFloat()},${whatsapp.centerY.toFloat()}", host.calls.last())
+        if (PLAY_DISTRIBUTION) {
+            assertTrue(host.calls.none { it.startsWith("tap") })
+            assertTrue(shadowOf(service.get()).gesturesDispatched.any { it.description().displayId == 7 } ||
+                A11yTrees.actions(card).isNotEmpty())
+        } else {
+            assertEquals("tap ${whatsapp.centerX.toFloat()},${whatsapp.centerY.toFloat()}", host.calls.last())
+        }
     }
 
     @Test fun anAppsOwnCloseAllTabsIsNotBlocked() = runBlocking {
@@ -93,6 +102,17 @@ class RecentsGuardRobolectricTest {
         val element = exec.screen().elements.single { it.label == "Close all tabs" }
         assertTrue(exec.clickElement(element, long = false).ok)
         assertEquals(1, A11yTrees.actions(button).size)
-        assertTrue(exec.swipe(500f, 500f, 500f, 100f, 300).ok)
+        if (PLAY_DISTRIBUTION) {
+            val swipe = async(Dispatchers.Default) { exec.swipe(500f, 500f, 500f, 100f, 300) }
+            val shadow = shadowOf(service.get())
+            assertTrue(RoboSupport.waitFor { shadow.gesturesDispatched.isNotEmpty() })
+            val gesture = shadow.gesturesDispatched.single()
+            assertEquals(7, gesture.description().displayId)
+            gesture.callback().onCompleted(gesture.description())
+            assertTrue(swipe.await().ok)
+            assertTrue(host.calls.none { it.startsWith("swipe") })
+        } else {
+            assertTrue(exec.swipe(500f, 500f, 500f, 100f, 300).ok)
+        }
     }
 }

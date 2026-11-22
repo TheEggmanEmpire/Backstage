@@ -1,5 +1,6 @@
 package com.eggman.backstage.robolectric
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.app.Application
 import android.app.NotificationManager
 import android.content.ComponentName
@@ -128,7 +129,7 @@ class BootstrapRobolectricTest {
         assertSame(app, TestDesktopBridge.installedWith)
         assertSame(TestDesktopBridge.host, DesktopHosts.current)
         // Accessibility auto-enable follows desktop start/stop.
-        assertEquals(1, TestDesktopBridge.host.listeners.size)
+        assertEquals(if (PLAY_DISTRIBUTION) 0 else 1, TestDesktopBridge.host.listeners.size)
 
         // A task without a configured provider fails at once; its outcome reaches the mini window's caption.
         val handle = Backstage.controller.submit(TaskRequest("Open the calculator", Source.CHAT))

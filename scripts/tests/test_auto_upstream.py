@@ -24,7 +24,7 @@ class AutomaticUpdateTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
         (root / 'backstage').mkdir()
-        (root / 'backstage/dextop-integration.gradle').write_text("def backstageVersion = (findProperty('backstage.version') ?: '1.0.1').toString()\n")
+        (root / 'backstage/version.properties').write_text("version=1.0.1\n")
         (root / 'README.md').write_text('![Release](https://img.shields.io/badge/release-v1.0.1-blue)\n')
         (root / 'CHANGELOG.md').write_text('# Changelog\n\n## 1.0.1\n\nExisting release.\n')
         return root
@@ -33,7 +33,7 @@ class AutomaticUpdateTest(unittest.TestCase):
         auto = self.module()
         root = self.fixture()
         self.assertEqual('1.0.2', auto.bump_release(root, 'v2.3.4'))
-        self.assertIn("?: '1.0.2'", (root / 'backstage/dextop-integration.gradle').read_text())
+        self.assertIn("version=1.0.2", (root / 'backstage/version.properties').read_text())
         self.assertEqual('![Release](https://img.shields.io/badge/release-v1.0.1-blue)\n', (root / 'README.md').read_text())
         self.assertEqual('# Changelog\n\n## 1.0.2\n\nDextop updated to v2.3.4.\n\n## 1.0.1\n\nExisting release.\n', (root / 'CHANGELOG.md').read_text())
 
@@ -56,10 +56,10 @@ class AutomaticUpdateTest(unittest.TestCase):
         auto = self.module()
         root = self.fixture()
         (root / 'CHANGELOG.md').write_text('# Changelog\n')
-        original = (root / 'backstage/dextop-integration.gradle').read_bytes()
+        original = (root / 'backstage/version.properties').read_bytes()
         with self.assertRaises(ValueError):
             auto.bump_release(root, 'v2.3.4')
-        self.assertEqual(original, (root / 'backstage/dextop-integration.gradle').read_bytes())
+        self.assertEqual(original, (root / 'backstage/version.properties').read_bytes())
 
     def test_archive_allows_only_update_outputs(self):
         auto = self.module()
@@ -173,7 +173,7 @@ class AutomaticUpdateTest(unittest.TestCase):
             auto.publish('owner/repo', 'v2.3.4', base, archive)
         staged = next(call.args for call in git.call_args_list if call.args[0] == 'add')
         self.assertEqual(('add', '-A', '-f', '--', *auto.UPDATE_PATHS,
-                          'backstage/dextop-integration.gradle', 'CHANGELOG.md'), staged)
+                          'backstage/version.properties', 'CHANGELOG.md'), staged)
         self.assertEqual(self.fixture().joinpath('README.md').read_bytes(), (target / 'README.md').read_bytes())
         git.assert_any_call('push', '--atomic', 'origin', 'HEAD:main', 'refs/tags/v1.0.2', 'refs/tags/dextop-v2.3.4')
         run.assert_called_once_with('gh', 'workflow', 'run', 'build.yml', '--repo', 'owner/repo', '--ref', 'v1.0.2', '-f', 'prerelease=true')

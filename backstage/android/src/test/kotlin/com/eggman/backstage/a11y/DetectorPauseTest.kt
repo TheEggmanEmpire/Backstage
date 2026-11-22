@@ -1,5 +1,6 @@
 package com.eggman.backstage.a11y
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.data.MemoryStore
 import com.eggman.backstage.data.Settings
 import org.junit.Assert.assertEquals
@@ -66,7 +67,7 @@ class DetectorPauseTest {
 
     @Test fun pauseIsOnByDefaultForTheDefaultDetectorOnly() {
         val s = Settings(MemoryStore())
-        assertTrue(s.detectorPause)
+        assertEquals(!PLAY_DISTRIBUTION, s.detectorPause)
         assertEquals(Settings.DEFAULT_DETECTORS, s.detectorPackages)
         assertEquals(setOf(paypay), s.detectorPackageSet())
     }

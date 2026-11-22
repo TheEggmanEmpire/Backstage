@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- English texts of Dextop's native screens and notifications that name the app (upstream values-en is generated
+     from its ARB catalog at build time; the flavor overlay wins). -->
+<resources>
+    <string name="dextop_swipe_ime_label">Backstage swipe input</string>
+    <string name="embedded_pairing_title">Pair Backstage</string>
+    <string name="embedded_pairing_success_message">Backstage access is connected. Return to Backstage.</string>
+    <string name="embedded_pairing_failed">Backstage could not connect</string>
+    <string name="dextop_shortcut_start_display">Start desktop</string>
+    <string name="dextop_shortcut_start_display_long">Start or stop the Backstage desktop</string>
+</resources>

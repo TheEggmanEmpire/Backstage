@@ -3,8 +3,8 @@
 #
 #   scripts/test.sh [--only library|lint|flutter|android]... [--no-prepare]
 #
-# library: cd backstage &&./gradlew:backstage:testDebugUnitTest   (the agent library, JVM unit tests)
-# lint   : cd backstage &&./gradlew:backstage:lintDebug           (Android Lint; any error fails, no baseline)
+# library: cd backstage &&./gradlew:backstage:testGithubDebugUnitTest :backstage:testPlayDebugUnitTest   (the agent library, JVM unit tests)
+# lint   : cd backstage &&./gradlew:backstage:lintGithubDebug           (Android Lint; any error fails, no baseline)
 # flutter: flutter test on the patched Dextop tree    (failures listed in scripts/known-flutter-test-failures.txt
 #                                                       are pre-existing upstream failures and tolerated)
 # android:./gradlew testGithubDebugUnitTest on the patched tree
@@ -47,12 +47,12 @@ run_suite() {
 }
 
 library_tests() {
-  (cd "$ROOT/backstage" && heavy ./gradlew --console=plain :backstage:testDebugUnitTest; rc=$?; ./gradlew --stop >/dev/null 2>&1; exit $rc)
+  (cd "$ROOT/backstage" && heavy ./gradlew --console=plain :backstage:testGithubDebugUnitTest :backstage:testPlayDebugUnitTest; rc=$?; ./gradlew --stop >/dev/null 2>&1; exit $rc)
 }
 
 library_lint() {
-  local report="$ROOT/backstage/android/build/reports/lint-results-debug.txt"
-  (cd "$ROOT/backstage" && heavy ./gradlew --console=plain :backstage:lintDebug; rc=$?; ./gradlew --stop >/dev/null 2>&1; exit $rc) ||
+  local report="$ROOT/backstage/android/build/reports/lint-results-githubDebug.txt"
+  (cd "$ROOT/backstage" && heavy ./gradlew --console=plain :backstage:lintGithubDebug; rc=$?; ./gradlew --stop >/dev/null 2>&1; exit $rc) ||
     { [ -f "$report" ] && grep -E '^[^ ].*: Error: ' "$report" >&2; return 1; }
   [ -f "$report" ] && log "lint: $(tail -n 1 "$report")"
   return 0

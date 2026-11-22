@@ -1,11 +1,12 @@
 package com.eggman.backstage.tools
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.exec.TargetKind
 import org.json.JSONArray
 import org.json.JSONObject
 
 data class Contact(val name: String, val numbers: List<String>, val emails: List<String>)
-enum class SmsSendResult { SENT, FAILED }
+enum class SmsSendResult { SENT, DRAFT_OPENED, DRAFT_READY, FAILED }
 
 /**
  * Device settings and personal-data actions that need no screen (permission-gated device tools).
@@ -135,17 +136,20 @@ object DeviceControlTools {
                 list.forEach { put(JSONObject().put("name", it.name).put("phones", JSONArray(it.numbers)).put("emails", JSONArray(it.emails))) }
             }))
         },
-        simple("sms_send", "Send an SMS. The phone asks its user to approve the exact number and text before it is sent, " +
+        simple("sms_send", if (PLAY_DISTRIBUTION) "Prepare a draft in the phone's SMS app for the user to review and send."
+        else "Send an SMS. The phone asks its user to approve the exact number and text before it is sent, " +
             "so do not call confirm_action first.", Schema.obj(
             "phone_number" to Schema.str("Recipient number"), "message" to Schema.str("Text"), required = listOf("phone_number", "message"),
         ), mutating = true, approval = { ctx, a ->
             dc(ctx, "sms")
-            "Send an SMS to ${smsNumber(a)}: “${a.string("message").take(500)}”"
+            "${if (PLAY_DISTRIBUTION) "Prepare an SMS draft" else "Send an SMS"} to ${smsNumber(a)}: “${a.string("message").take(500)}”"
         }) { ctx, a ->
             val n = smsNumber(a)
             val control = dc(ctx, "sms")
             when (control.sendSmsResult(n, a.string("message"))) {
-                SmsSendResult.FAILED -> ToolResult.error("The SMS could not be sent.")
+                SmsSendResult.DRAFT_OPENED -> ToolResult("SMS draft opened for $n. The user must send it.")
+                SmsSendResult.DRAFT_READY -> ToolResult("SMS draft ready for $n. The user must open the notification and send it.")
+                SmsSendResult.FAILED -> ToolResult.error(if (PLAY_DISTRIBUTION) "The SMS draft could not be prepared." else "The SMS could not be sent.")
                 SmsSendResult.SENT -> ToolResult("SMS sent to $n.")
             }
         },

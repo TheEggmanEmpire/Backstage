@@ -1,5 +1,6 @@
 package com.eggman.backstage.omp
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.content.Context
 import com.eggman.backstage.data.Settings
 import com.eggman.backstage.privileged.Privileged
@@ -46,6 +47,7 @@ class OmpRuntime(private val context: Context, val payload: OmpPayload, private 
      * output to close and have no timeout, so a multi-minute install must never hold their pipes.
    */
     suspend fun install(onProgress: (String) -> Unit = {}): ShellResult = mutation.withLock {
+        if (PLAY_DISTRIBUTION) return@withLock ShellResult(126, "", "OMP is available in the GitHub build.")
         check(payload.available) { "OMP not available in this build" }
         check(Privileged.available()) { "OMP needs privileged access" }
         val apk = shellQuote(context.applicationInfo.sourceDir)
@@ -108,6 +110,7 @@ class OmpRuntime(private val context: Context, val payload: OmpPayload, private 
     suspend fun run(argv: List<String>, timeoutMs: Long = 60_000): ShellResult =
         Privileged.exec("sh", "$ROOT/run.sh", ROOT, libDir, "--", *argv.toTypedArray(), timeoutMs = timeoutMs)
     suspend fun update(): ShellResult = mutation.withLock {
+        if (PLAY_DISTRIBUTION) return@withLock ShellResult(126, "", "OMP is available in the GitHub build.")
         check(unavailableReason() == null) { unavailableReason().orEmpty() }
         val r = run(listOf("omp-termux", "install", "latest"), 600_000)
         // bun global install may replace bin/omp with its own symlink. Remove it before restoring

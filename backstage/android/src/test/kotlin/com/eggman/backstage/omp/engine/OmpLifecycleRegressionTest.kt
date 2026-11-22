@@ -1,5 +1,6 @@
 package com.eggman.backstage.omp.engine
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.agent.*
 import com.eggman.backstage.agent.api.*
 import com.eggman.backstage.data.AgentEngine
@@ -218,6 +219,7 @@ class OmpLifecycleRegressionTest {
     }
 
     @Test fun sessionVetoUsesNativeControllerFallbackAndShowsTheNoticePerTask() = runBlocking {
+        org.junit.Assume.assumeFalse(PLAY_DISTRIBUTION)
         EnginePeer(this, veto = true).use { peer ->
             val native = ScriptedLlm(script(ScriptedLlm.text("first"), ScriptedLlm.text("second")))
             val env = FakeEnv(TestScope(), native)

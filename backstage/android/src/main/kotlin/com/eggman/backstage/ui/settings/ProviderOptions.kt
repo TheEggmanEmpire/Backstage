@@ -1,5 +1,6 @@
 package com.eggman.backstage.ui.settings
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.data.Provider
 
 /**
@@ -38,7 +39,8 @@ object ProviderOptions {
         } else if (option.needsKey && key.isBlank()) add("Add an API key for ${option.label}.")
         if (model.isBlank()) add("Choose a model.")
         val url = baseUrl.trim()
-        if (!(url.startsWith("https://") || url.startsWith("http://"))) add("Enter an address beginning with http:// or https://.")
+        if (PLAY_DISTRIBUTION && !url.startsWith("https://")) add("Enter an HTTPS endpoint.")
+        else if (!PLAY_DISTRIBUTION && !(url.startsWith("https://") || url.startsWith("http://"))) add("Enter an address beginning with http:// or https://.")
         else if (url.startsWith("http://") && option.needsKey && !isLocalHost(url)) add("Use https:// so your key is not sent in clear text.")
     }
 

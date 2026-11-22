@@ -40,6 +40,10 @@ class AgentAccessibility internal constructor(
     private fun ownPhoneEvent(event: AccessibilityEvent): Boolean =
         event.displayId == android.view.Display.DEFAULT_DISPLAY && event.packageName?.toString() == service.packageName
 
+    internal fun observeWindowEvent(displayId: Int, type: Int, packageName: String) {
+        settle.onEvent(displayId, isWindowChange(type), packageName)
+    }
+
     private fun recordNotification(event: AccessibilityEvent) {
         val pkg = event.packageName?.toString().orEmpty()
         if (pkg == service.packageName) return

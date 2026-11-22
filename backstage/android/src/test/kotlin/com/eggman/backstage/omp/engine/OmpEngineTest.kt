@@ -1,5 +1,6 @@
 package com.eggman.backstage.omp.engine
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.agent.*
 import com.eggman.backstage.agent.api.*
 import com.eggman.backstage.data.*
@@ -176,6 +177,7 @@ class OmpEngineTest {
         }
     }
     @Test fun controllerFallbackNoticeIsShownForEveryTaskAndNativeTasksStillFinish() = runTest {
+        org.junit.Assume.assumeFalse(PLAY_DISTRIBUTION)
         val env = FakeEnv(this, ScriptedLlm(script(ScriptedLlm.text("first"), ScriptedLlm.text("second"))))
         env.settings.agentEngine = AgentEngine.OMP
         val controller = AgentControllerImpl(env, StandardTestDispatcher(testScheduler), OmpEngine({ "privilege missing" }, { error("unavailable") }))
@@ -190,6 +192,7 @@ class OmpEngineTest {
         assertEquals(2, controller.transcript.value.count { it.text.startsWith("omp unavailable;") })
     }
     @Test fun controllerPublishesOmpTextStepsAndTheFinalSnapshot() = runBlocking {
+        org.junit.Assume.assumeFalse(PLAY_DISTRIBUTION)
         Peer(this, "steps").use { peer ->
             val native = ScriptedLlm(mutableListOf())
             val env = FakeEnv(TestScope(), native)
@@ -209,6 +212,7 @@ class OmpEngineTest {
         }
     }
     @Test fun controllerPublishesLiveThinkingAndKeepsItInTheFinishedThread() = runBlocking {
+        org.junit.Assume.assumeFalse(PLAY_DISTRIBUTION)
         Peer(this, "thinking").use { peer ->
             val env = FakeEnv(TestScope(), ScriptedLlm(mutableListOf()))
             env.settings.agentEngine = AgentEngine.OMP
@@ -231,6 +235,7 @@ class OmpEngineTest {
         }
     }
     @Test fun orderedMessagesAndBoundedToolTailSurviveSnapshotAndThreadReload() = runBlocking {
+        org.junit.Assume.assumeFalse(PLAY_DISTRIBUTION)
         Peer(this, "multi").use { peer ->
             val env = FakeEnv(TestScope(), ScriptedLlm(mutableListOf()))
             env.settings.agentEngine = AgentEngine.OMP
@@ -253,6 +258,7 @@ class OmpEngineTest {
         }
     }
     @Test fun toolSecretsNeverReachSnapshotsRenderedEntriesOrEncodedThreadsAndHistory() = runBlocking {
+        org.junit.Assume.assumeFalse(PLAY_DISTRIBUTION)
         Peer(this, "secrets").use { peer ->
             val env = FakeEnv(TestScope(), ScriptedLlm(mutableListOf()))
             env.settings.agentEngine = AgentEngine.OMP
@@ -282,6 +288,7 @@ class OmpEngineTest {
         }
     }
     @Test fun hostLabelsRedactFullSecretsBeforeTruncatingWithoutChangingTheToolInput() = runBlocking {
+        org.junit.Assume.assumeFalse(PLAY_DISTRIBUTION)
         Peer(this, "host_label").use { peer ->
             val env = FakeEnv(TestScope(), ScriptedLlm(mutableListOf()))
             env.settings.agentEngine = AgentEngine.OMP

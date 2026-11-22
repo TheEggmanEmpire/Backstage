@@ -1,5 +1,6 @@
 package com.eggman.backstage.ui.settings
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import androidx.compose.foundation.clickable
 import android.Manifest
 import android.content.Context
@@ -150,7 +151,7 @@ fun SettingsScreen(
             SettingsCard(SettingsGroup.AGENT, destination) { AgentWorkflowSettings(store) }
             SettingsCard(SettingsGroup.SAFETY, destination) {
                 SafetySettings(store)
-                SkillScriptsSettingsSection(store)
+                if (!PLAY_DISTRIBUTION) SkillScriptsSettingsSection(store)
             }
             SettingsCard(SettingsGroup.SCREEN, destination) { ScreenSettings(store) }
             if (desktopAvailable) SettingsCard(SettingsGroup.DESKTOP, destination) { DesktopPopupSettings(store) }
@@ -165,7 +166,7 @@ fun SettingsScreen(
                 RemoteMcpSection(store)
             }
             SettingsCard(SettingsGroup.AUTOMATION, destination) { AutomationSection(store) }
-            SettingsCard(SettingsGroup.OMP, destination) { OmpSettingsSection(store) }
+            if (!PLAY_DISTRIBUTION) SettingsCard(SettingsGroup.OMP, destination) { OmpSettingsSection(store) }
             if (updatesAvailable) SettingsCard(SettingsGroup.UPDATES, destination) { com.eggman.backstage.update.UpdatesSection() }
             SettingsCard(SettingsGroup.ABOUT, destination) { BackupAboutSettings(onOpenSetup, onOpenLicenses) }
         }
@@ -366,22 +367,24 @@ private fun ChatGptAccount(store: BackstageSettingsStore, onChanged: () -> Unit)
 }
 
 @Composable
-private fun ProviderSection(store: BackstageSettingsStore) {
+internal fun ProviderSection(store: BackstageSettingsStore) {
     SettingsSection("AI provider", "Bring your own key. Requests go straight from this phone to the provider you pick.") {
-        var engine by remember { mutableStateOf(store.agentEngine) }
-        DisposableEffect(store) {
-            val stop = store.observe { if (it == "agent_engine") engine = store.agentEngine }
-            onDispose { stop() }
-        }
-        Text("Agent engine", style = MaterialTheme.typography.labelLarge)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            com.eggman.backstage.data.AgentEngine.entries.forEach { e ->
-                FilterChip(engine == e, { engine = e; store.agentEngine = e }, { Text(e.label) })
+        if (!PLAY_DISTRIBUTION) {
+            var engine by remember { mutableStateOf(store.agentEngine) }
+            DisposableEffect(store) {
+                val stop = store.observe { if (it == "agent_engine") engine = store.agentEngine }
+                onDispose { stop() }
             }
+            Text("Agent engine", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                com.eggman.backstage.data.AgentEngine.entries.forEach { e ->
+                    FilterChip(engine == e, { engine = e; store.agentEngine = e }, { Text(e.label) })
+                }
+            }
+            Text(if (engine == com.eggman.backstage.data.AgentEngine.OMP)
+                "Uses the installed OMP harness and privileged access. Falls back to Backstage when unavailable. omp's own shell tools run with shell-user access."
+                else "The native Backstage agent loop.", style = MaterialTheme.typography.bodySmall)
         }
-        Text(if (engine == com.eggman.backstage.data.AgentEngine.OMP)
-            "Uses the installed OMP harness and privileged access. Falls back to Backstage when unavailable. omp's own shell tools run with shell-user access."
-            else "The native Backstage agent loop.", style = MaterialTheme.typography.bodySmall)
         var providerId by remember { mutableStateOf(store.providerId) }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ProviderOptions.all.forEach { p ->
@@ -568,19 +571,21 @@ private fun SafetySettings(store: BackstageSettingsStore) {
         }
     }
     Text(unattendedDetail(unattended), style = MaterialTheme.typography.bodySmall)
-    Text("ADB commands", style = MaterialTheme.typography.labelLarge)
-    val adbAutoApprove by rememberAdbAutoApprove(store)
-    val adbAvailable by rememberAdbAvailable()
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        FilterChip(!adbAutoApprove, { store.adbAutoApprove = false }, { Text("Ask each time") })
-        FilterChip(adbAutoApprove, { store.adbAutoApprove = true }, { Text("Auto") })
+    if (!PLAY_DISTRIBUTION) {
+        Text("ADB commands", style = MaterialTheme.typography.labelLarge)
+        val adbAutoApprove by rememberAdbAutoApprove(store)
+        val adbAvailable by rememberAdbAvailable()
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(!adbAutoApprove, { store.adbAutoApprove = false }, { Text("Ask each time") })
+            FilterChip(adbAutoApprove, { store.adbAutoApprove = true }, { Text("Auto") })
+        }
+        Text(
+            if (adbAutoApprove) "Commands run without asking, as the shell user. Anything the agent decides to run — uninstalling apps, changing system settings — happens immediately."
+            else "The agent can run ADB shell commands (install, uninstall, pm, am, settings …) through Stellar, Shizuku or Dextop's wireless debugging. You approve each command.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (!adbAvailable) Text("Needs Stellar, Shizuku or Dextop wireless debugging.", style = MaterialTheme.typography.bodySmall)
     }
-    Text(
-        if (adbAutoApprove) "Commands run without asking, as the shell user. Anything the agent decides to run — uninstalling apps, changing system settings — happens immediately."
-        else "The agent can run ADB shell commands (install, uninstall, pm, am, settings …) through Stellar, Shizuku or Dextop's wireless debugging. You approve each command.",
-        style = MaterialTheme.typography.bodySmall,
-    )
-    if (!adbAvailable) Text("Needs Stellar, Shizuku or Dextop wireless debugging.", style = MaterialTheme.typography.bodySmall)
     SettingToggle("Remote callers may use the phone screen", "MCP clients and the broadcast API stay on the DeX desktop unless this is on",
         { store.externalPhoneControl }) { store.externalPhoneControl = it }
 }
@@ -611,43 +616,6 @@ private fun ScreenSettings(store: BackstageSettingsStore) {
             FilterChip(lead == ms, { lead = ms; store.agentCursorLeadMs = ms }, { Text(if (ms == 0) "No delay" else "$ms ms") })
         }
     }
-}
-
-/** Accessibility consent (prominent disclosure), revocable at any time. */
-@Composable
-internal fun AccessibilitySection(store: BackstageSettingsStore) {
-    var consent by remember { mutableStateOf(store.accessibilityConsent) }
-    var auto by remember { mutableStateOf(store.autoEnableAccessibility) }
-    var disclose by remember { mutableStateOf(false) }
-    SettingsSection("Accessibility", "One accessibility service, \"Backstage\", runs the desktop and lets the agent read and operate apps. Screen content goes only to your AI provider.") {
-        ToggleRow("Consent to accessibility use", if (consent) "Given. Turn off to withdraw: Backstage then never switches the service on by itself." +
-            " Switch the service off in Android's accessibility settings to stop it now." else "Not given: Backstage does not switch its accessibility service on.", consent) { on ->
-            if (on) disclose = true
-            else { consent = false; store.accessibilityConsent = false }
-        }
-        ToggleRow("Turn the service back on automatically", "With Stellar, Shizuku or wireless debugging: re-enables the service when the desktop resets the accessibility list",
-            auto && consent, enabled = consent) { auto = it; store.autoEnableAccessibility = it }
-        var pause by remember { mutableStateOf(store.detectorPause) }
-        var delayS by remember { mutableStateOf((store.detectorPauseDelayMs / 1000).toString()) }
-        var pkgs by remember { mutableStateOf(store.detectorPackages) }
-        ToggleRow("Pause while a detector app is in front",
-            "Switches the service off while an app that warns about enabled accessibility services is in front, and back on after it left",
-            pause && consent, enabled = consent) { pause = it; store.detectorPause = it }
-        if (pause && consent) {
-            OutlinedTextField(delayS, { v ->
-                val d = v.filter { it.isDigit() }.take(2)
-                delayS = d
-                d.toIntOrNull()?.let { store.detectorPauseDelayMs = it.coerceIn(1, 60) * 1000 }
-            }, label = { Text("Re-check seconds") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(pkgs, { pkgs = it; store.detectorPackages = it },
-                label = { Text("Detector packages") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                supportingText = { Text("Package names, colon- or comma-separated.") })
-        }
-    }
-    if (disclose) com.eggman.backstage.ui.onboarding.AccessibilityDisclosureDialog(
-        onAgree = { consent = true; store.accessibilityConsent = true; disclose = false },
-        onDecline = { disclose = false },
-    )
 }
 
 @Composable

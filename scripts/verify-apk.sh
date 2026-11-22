@@ -6,7 +6,7 @@
 # signing : apksigner verify --print-certs: APK Signature Scheme v2/v3, one signer; --release: not the Android
 #            debug key (set BACKSTAGE_EXPECT_CERT_SHA256 to pin the release certificate)
 # badging : aapt2 dump badging: applicationId com.eggman.backstage, versionName/versionCode as derived from
-#            backstage/dextop-integration.gradle + upstream pubspec, minSdk = upstream's, targetSdk >= 34,
+#            backstage/version.properties + upstream pubspec, minSdk = upstream's, targetSdk >= 34,
 #            application label "Backstage" + exactly one launcher ("Backstage" = Dextop's launcher, Home with the AI
 #            tab); debuggable only without --release;
 #            --release: native code only for BACKSTAGE_TARGET_PLATFORM (default android-arm64)

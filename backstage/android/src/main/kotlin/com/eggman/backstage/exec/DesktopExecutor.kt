@@ -1,5 +1,6 @@
 package com.eggman.backstage.exec
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import android.content.Intent
 import android.graphics.Rect
 import com.eggman.backstage.host.DesktopHost
@@ -37,7 +38,8 @@ class DesktopExecutor(
     override suspend fun grabScreenshot(): ScreenImage? {
         // The agent never sees its own cursor.
         val frame = com.eggman.backstage.cursor.AgentCursor.hiddenDuring(displayId) {
-            runCatching { host.captureFrame() }.getOrNull() ?: a11y()?.screenshot(displayId)
+            val local = if (PLAY_DISTRIBUTION) null else runCatching { host.captureFrame() }.getOrNull()
+            local ?: a11y()?.screenshot(displayId)
         } ?: return null
         return encode(frame, width, height, screenshotQuality, screenshotScale).also { if (!frame.isRecycled) frame.recycle() }
     }
@@ -52,25 +54,27 @@ class DesktopExecutor(
     override suspend fun tap(x: Float, y: Float): ActionResult {
         cursor(com.eggman.backstage.cursor.CursorEvent.Tap(displayId, x, y))
         elementAt(x, y)?.let { e -> sharedControlRefusal(e)?.let { return ActionResult.fail(it) } }
-        if (host.tap(x, y)) return ActionResult.ok("Tapped (${x.toInt()},${y.toInt()})")
+        if (!PLAY_DISTRIBUTION && host.tap(x, y)) return ActionResult.ok("Tapped (${x.toInt()},${y.toInt()})")
         val s = a11y()
         if (s != null && s.tap(displayId, x, y)) return ActionResult.ok("Tapped (${x.toInt()},${y.toInt()}) via accessibility gesture")
         return ActionResult.fail("Tap at (${x.toInt()},${y.toInt()}) was rejected by the system")
     }
 
     override suspend fun longPress(x: Float, y: Float, durationMs: Long) =
-        cursor(com.eggman.backstage.cursor.CursorEvent.LongPress(displayId, x, y, durationMs)).let { result(host.longPress(x, y, durationMs) || a11y()?.longPress(displayId, x, y, durationMs) == true, "Long press at (${x.toInt()},${y.toInt()})") }
+        cursor(com.eggman.backstage.cursor.CursorEvent.LongPress(displayId, x, y, durationMs)).let { result((!PLAY_DISTRIBUTION && host.longPress(x, y, durationMs)) || a11y()?.longPress(displayId, x, y, durationMs) == true, "Long press at (${x.toInt()},${y.toInt()})") }
 
     override suspend fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long): ActionResult {
         cursor(com.eggman.backstage.cursor.CursorEvent.Swipe(displayId, x1, y1, x2, y2, durationMs))
         windowAt(x1, y1)?.let { w -> SharedRecentsGuard.swipeRefusal(w.title, w.packageName, homePackages())?.let { return ActionResult.fail(it) } }
-        return result(host.swipe(x1, y1, x2, y2, durationMs) || a11y()?.swipe(displayId, x1, y1, x2, y2, durationMs) == true, "Swipe")
+        return result((!PLAY_DISTRIBUTION && host.swipe(x1, y1, x2, y2, durationMs)) || a11y()?.swipe(displayId, x1, y1, x2, y2, durationMs) == true, "Swipe")
     }
 
-    override suspend fun rightClick(x: Float, y: Float) = cursor(com.eggman.backstage.cursor.CursorEvent.Tap(displayId, x, y)).let { result(host.rightClick(x, y), "Right-click at (${x.toInt()},${y.toInt()})") }
+    override suspend fun rightClick(x: Float, y: Float) =
+        if (PLAY_DISTRIBUTION) super.rightClick(x, y) else cursor(com.eggman.backstage.cursor.CursorEvent.Tap(displayId, x, y)).let { result(host.rightClick(x, y), "Right-click at (${x.toInt()},${y.toInt()})") }
 
     override suspend fun scrollWheel(x: Float, y: Float, vertical: Float, horizontal: Float) =
-        cursor(com.eggman.backstage.cursor.CursorEvent.Scroll(displayId, x, y, wheelDirection(vertical, horizontal))).let { result(host.scrollWheel(x, y, vertical, horizontal), "Mouse wheel scroll") }
+        if (PLAY_DISTRIBUTION) super.scrollWheel(x, y, vertical, horizontal)
+        else cursor(com.eggman.backstage.cursor.CursorEvent.Scroll(displayId, x, y, wheelDirection(vertical, horizontal))).let { result(host.scrollWheel(x, y, vertical, horizontal), "Mouse wheel scroll") }
 
     private fun wheelDirection(v: Float, h: Float) = when {
         kotlin.math.abs(h) > kotlin.math.abs(v) -> if (h > 0) "right" else "left"
@@ -82,7 +86,7 @@ class DesktopExecutor(
         val area = element?.bounds ?: Box(0, 0, width, height)
         cursor(com.eggman.backstage.cursor.CursorEvent.Scroll(displayId, area.centerX.toFloat(), area.centerY.toFloat(), direction))
         val amount = when (direction.lowercase()) { "down" -> 5f to 0f; "up" -> -5f to 0f; "right" -> 0f to 5f; "left" -> 0f to -5f; else -> null }
-        if (amount != null && host.scrollWheel(area.centerX.toFloat(), area.centerY.toFloat(), amount.first, amount.second)) {
+        if (!PLAY_DISTRIBUTION && amount != null && host.scrollWheel(area.centerX.toFloat(), area.centerY.toFloat(), amount.first, amount.second)) {
             return ActionResult.ok("Scrolled ${direction.lowercase()}")
         }
         return super.scrollElement(element, direction)
@@ -93,6 +97,7 @@ class DesktopExecutor(
             cursor(com.eggman.backstage.cursor.CursorEvent.Type(displayId, element?.centerX?.toFloat(), element?.centerY?.toFloat()))
             val s = a11y()
             if (s != null && s.setText(element?.handle, displayId, text)) return@withContext ActionResult.ok("Entered text (verified)")
+            session.failureHint?.let { return@withContext ActionResult.fail(it) }
             var status = s?.textVerification(element?.handle, displayId, text)
             if (status in setOf(com.eggman.backstage.a11y.TextVerification.LENGTH_LIMIT, com.eggman.backstage.a11y.TextVerification.FILTERED)) {
                 return@withContext ActionResult.fail("Text entry failed: ${status!!.message}")
@@ -100,11 +105,15 @@ class DesktopExecutor(
             if (element != null) {
                 tap(element.centerX.toFloat(), element.centerY.toFloat())
                 if (s != null && s.setText(null, displayId, text)) return@withContext ActionResult.ok("Entered text (verified)")
+                session.failureHint?.let { return@withContext ActionResult.fail(it) }
                 status = s?.textVerification(null, displayId, text)
             }
             if (status in setOf(com.eggman.backstage.a11y.TextVerification.LENGTH_LIMIT, com.eggman.backstage.a11y.TextVerification.FILTERED)) {
                 return@withContext ActionResult.fail("Text entry failed: ${status!!.message}")
             }
+            if (PLAY_DISTRIBUTION) return@withContext ActionResult.fail(
+                "Backstage Agent could not enter text: ${status?.message ?: "tap the input field first"}",
+            )
             if (!key("ctrl+a").ok) return@withContext ActionResult.fail("Text entry failed: could not select the field contents")
             if (!host.typeText(text)) return@withContext ActionResult.fail("Text entry failed: ${status?.message ?: "nothing taken; tap the input field first"}")
             when (val verified = s?.textVerification(null, displayId, text)) {
@@ -119,6 +128,9 @@ class DesktopExecutor(
 
     override suspend fun key(name: String): ActionResult {
         val n = KeyNames.normalize(name)
+        if (PLAY_DISTRIBUTION) return if (n == "enter" && a11y()?.imeEnter(displayId) == true)
+            ActionResult.ok("Pressed enter")
+        else ActionResult.fail("Use an on-screen control on this display.")
         if (n in setOf("back", "home", "recents")) {
             if (host.globalAction(n)) {
                 // The desktop's recent-apps view lists the phone's apps too: "Close all" there closed them (user report).
@@ -136,6 +148,7 @@ class DesktopExecutor(
      * refused when it acts on the phone, and home/back/close-window ones are carried out on the desktop display.
    */
     override suspend fun keyChord(keyCode: Int, metaState: Int, label: String): ActionResult {
+        if (PLAY_DISTRIBUTION) return super.keyChord(keyCode, metaState, label)
         DesktopKeyPolicy.refusal(keyCode)?.let { return ActionResult.fail(it) }
         val shortcut = DesktopShortcuts.match(DesktopShortcuts.Chord(keyCode, metaState))
         when (shortcut?.route) {

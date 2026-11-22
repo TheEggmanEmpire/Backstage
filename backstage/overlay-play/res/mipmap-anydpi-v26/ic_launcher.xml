@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dextop's own launcher icon resource, replaced by the Backstage icon (one app, one icon everywhere). -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/bs_ic_launcher_bg" />
+    <foreground android:drawable="@drawable/bs_ic_launcher_fg" />
+    <monochrome android:drawable="@drawable/bs_ic_launcher_mono" />
+</adaptive-icon>

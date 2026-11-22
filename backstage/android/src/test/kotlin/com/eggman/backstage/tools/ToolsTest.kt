@@ -1,5 +1,6 @@
 package com.eggman.backstage.tools
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.agent.api.PlanStep
 import com.eggman.backstage.exec.Executor
 import com.eggman.backstage.exec.TargetKind
@@ -427,10 +428,16 @@ class ToolsTest {
         assertFalse(run(ctx, "desktop_presentation", """{"presentation":"full"}""").isError)
         host.direct = false
         assertTrue(run(ctx, "desktop_presentation", """{"presentation":"mini"}""").isError)
-        run(ctx, "desktop_right_click", """{"x":10,"y":20}""")
-        assertEquals("right 10,20", ctx.desktopExec.actions.last())
-        run(ctx, "desktop_scroll_wheel", """{"amount":-2}""")
-        assertEquals("wheel -2.0", ctx.desktopExec.actions.last())
+        if (PLAY_DISTRIBUTION) {
+            assertTrue(run(ctx, "desktop_right_click", """{"x":10,"y":20}""").isError)
+            assertTrue(run(ctx, "desktop_scroll_wheel", """{"amount":-2}""").isError)
+            assertTrue(ctx.desktopExec.actions.isEmpty())
+        } else {
+            run(ctx, "desktop_right_click", """{"x":10,"y":20}""")
+            assertEquals("right 10,20", ctx.desktopExec.actions.last())
+            run(ctx, "desktop_scroll_wheel", """{"amount":-2}""")
+            assertEquals("wheel -2.0", ctx.desktopExec.actions.last())
+        }
         assertTrue(run(ctx, "desktop_window_list").text.contains("Example"))
         run(ctx, "desktop_stop")
         assertTrue(host.calls.contains("stop"))
@@ -578,7 +585,8 @@ class ToolsTest {
         val denied = run(ctx, "sms_send", sms)
         assertTrue(denied.isError)
         assertTrue(denied.text, denied.text.startsWith("Not done"))
-        assertEquals(listOf("irreversible:Send an SMS to +49 170 1234567: “On my way”"), hooks.asked)
+        val action = if (PLAY_DISTRIBUTION) "Prepare an SMS draft" else "Send an SMS"
+        assertEquals(listOf("irreversible:$action to +49 170 1234567: “On my way”"), hooks.asked)
         assertTrue(dc.calls.isEmpty())
         hooks.approve = true
         assertFalse(run(ctx, "sms_send", sms).isError)

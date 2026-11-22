@@ -29,9 +29,11 @@ interface AccessibilityBackend {
  * Executor's public setText signature. */
 class TextInputSession(val secret: Boolean = false) {
     @Volatile var clipboardNotice: String? = null
+    @Volatile var failureHint: String? = null
 
     companion object {
         const val CLIPBOARD_NOTICE = "Clipboard could not be restored."
+        const val SECRET_COMPANION_UPDATE = "Update Backstage Agent to enter secrets safely."
         val current = ThreadLocal<TextInputSession?>()
 
         suspend fun <T> withSession(secret: Boolean = false, block: suspend (TextInputSession) -> T): T {

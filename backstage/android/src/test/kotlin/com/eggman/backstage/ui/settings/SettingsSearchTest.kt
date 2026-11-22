@@ -1,5 +1,6 @@
 package com.eggman.backstage.ui.settings
 
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -27,7 +28,7 @@ class SettingsSearchTest {
     @Test fun catalogueHasUniqueIdsAndCoversEveryGroup() {
         val entries = SettingsSearch.entries
         assertEquals(entries.size, entries.map { it.id }.toSet().size)
-        assertEquals(SettingsGroup.entries.toSet(), entries.map { it.group }.toSet())
+        assertEquals(SettingsGroup.entries.filterNot { PLAY_DISTRIBUTION && it == SettingsGroup.OMP }.toSet(), entries.map { it.group }.toSet())
         assertTrue(entries.all { it.title.isNotBlank() && it.description.isNotBlank() && it.keywords.isNotEmpty() })
     }
 
@@ -37,8 +38,12 @@ class SettingsSearchTest {
             .map { it.resolve("android/src/main/kotlin/com/eggman/backstage") }
             .firstOrNull { it.isDirectory }
             ?: java.io.File("src/main/kotlin/com/eggman/backstage")
-        val sources = listOf("SettingsScreen.kt", "ModulesSettings.kt", "OmpSettings.kt", "SkillScriptsSettings.kt")
-            .map { root.resolve("ui/settings/$it") }
+        val channel = if (PLAY_DISTRIBUTION) "play" else "github"
+        val variant = root.resolve("../../../../../$channel/kotlin/com/eggman/backstage").normalize()
+        val shared = listOf("SettingsScreen.kt", "ModulesSettings.kt")
+        val githubOnly = listOf("OmpSettings.kt", "SkillScriptsSettings.kt")
+        val sources = (shared + if (PLAY_DISTRIBUTION) emptyList() else githubOnly)
+            .map { root.resolve("ui/settings/$it") } + variant.resolve("ui/settings/AccessibilitySection.kt")
         assertTrue("Settings sources must be available", sources.all { it.isFile })
         val controls = Regex("""(?:SettingToggle|ToggleRow|NumberSetting)\(\s*"([^"$]+)"""")
         val labels = Regex("""label = \{ Text\("([^"$]+)"\)""")
