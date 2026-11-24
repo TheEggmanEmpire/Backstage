@@ -36,6 +36,11 @@ if (releaseTag ==~ /v\d.*/ && releaseTag.substring(1) != backstageVersion) {
 def backstageApplicationId = 'com.eggman.backstage'
 def overlayDir = new File(backstageRoot, 'backstage/overlay')
 def playOverlayDir = new File(backstageRoot, 'backstage/overlay-play')
+// Google Play only: Play rejects native libraries without 16 KB ELF page alignment, and upstream's prebuilt
+// PulseAudio stack and DD-Turnip driver have 4 KB. The play flavor packages Backstage's 16 KB rebuilds of them
+// (scripts/build-native-16k.sh) instead; its source set takes precedence over upstream's main copies of the same
+// files. The github flavor keeps upstream's prebuilt files unchanged.
+def native16kDir = new File(backstageRoot, 'backstage/native-16k')
 def glueDir = new File(backstageRoot, 'backstage/dextop-glue/kotlin')
 def ompAssetsDir = new File(backstageRoot, 'build/omp-payload/assets')
 def ompManifest = new File(ompAssetsDir, 'omp/manifest.json')
@@ -62,6 +67,17 @@ def versionParts = backstageVersion.tokenize('.-+').take(3).collect { it.isInteg
 while (versionParts.size() < 3) versionParts << 0
 def backstageVersionCode = ((versionParts[0] * 100 + versionParts[1]) * 100 + versionParts[2]) * 1000 +
         (upstreamVersionCode % 1000)
+// A rebuild of the same version for a store that already holds its versionCode sets a higher code within the
+// version's range of 1000: -Pbackstage.versionCode=N or BACKSTAGE_VERSION_CODE=N.
+def versionCodeOverride = (findProperty('backstage.versionCode') ?: System.getenv('BACKSTAGE_VERSION_CODE'))?.toString()
+if (versionCodeOverride) {
+    def requested = versionCodeOverride.toInteger()
+    def rangeEnd = backstageVersionCode - (upstreamVersionCode % 1000) + 1000
+    if (requested < backstageVersionCode || requested >= rangeEnd) {
+        throw new GradleException("Backstage: versionCode ${requested} must be from ${backstageVersionCode} to ${rangeEnd - 1} for ${backstageVersion}.")
+    }
+    backstageVersionCode = requested
+}
 def backstageVersionName = backstageVersion
 
 project.ext.backstageVersionName = backstageVersionName
@@ -149,6 +165,8 @@ android {
         }
         // Upstream regenerates main/res strings on every build, so the label override lives in the flavor.
         play {
+            jniLibs.srcDir(new File(native16kDir, 'jniLibs'))
+            assets.srcDir(new File(native16kDir, 'assets'))
             res.srcDir(new File(playOverlayDir, 'res'))
             manifest.srcFile(new File(playOverlayDir, 'AndroidManifest.play.xml'))
         }

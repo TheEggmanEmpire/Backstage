@@ -737,6 +737,38 @@ def check_native_notices(rep, apk):
             rep.flag(f"built from {m.group(2)} source: no exact commit is its corresponding source")
 
 
+def elf_load_alignments(data):
+    """p_align of every PT_LOAD segment of a 64-bit little-endian ELF image; empty when it is not one."""
+    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        return []
+    phoff = int.from_bytes(data[32:40], "little")
+    phentsize = int.from_bytes(data[54:56], "little")
+    phnum = int.from_bytes(data[56:58], "little")
+    aligns = []
+    for i in range(phnum):
+        header = data[phoff + i * phentsize: phoff + (i + 1) * phentsize]
+        if len(header) >= 56 and int.from_bytes(header[0:4], "little") == 1:  # PT_LOAD
+            aligns.append(int.from_bytes(header[48:56], "little"))
+    return aligns
+
+
+def check_page_alignment(rep, apk, package):
+    """Google Play version only: every native library in lib/ has 16 KB LOAD alignment, which Google Play requires.
+    The GitHub version keeps upstream's prebuilt 4 KB PulseAudio and DD-Turnip files (NOTICE.md)."""
+    if not (package or "").endswith(".play"):
+        print(f"INFO 16 KB page alignment is required of the Google Play version only; {package} not checked")
+        return
+    try:
+        with zipfile.ZipFile(apk) as z:
+            libs = {n: elf_load_alignments(z.read(n)) for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}
+    except (OSError, zipfile.BadZipFile) as e:
+        rep.fail(f"cannot read {apk}: {e}")
+        return
+    small = sorted(n for n, aligns in libs.items() if aligns and min(aligns) < 16384)
+    rep.check(not small, f"all {len(libs)} native libraries in lib/ have 16 KB LOAD alignment",
+              f"LOAD segments below 16 KB in {small} (rebuild with -Wl,-z,max-page-size=16384)")
+
+
 def check_closed_source_sdks(rep, apk, repo_root):
     try:
         with zipfile.ZipFile(apk) as z:
@@ -869,6 +901,7 @@ def main():
     check_a11y_configs(rep, args.aapt2, args.apk, a11y)
     print("-- notices")
     check_native_notices(rep, args.apk)
+    check_page_alignment(rep, args.apk, package_name(args.aapt2, args.apk))
     check_closed_source_sdks(rep, args.apk, args.repo_root)
     print(f"== {rep.passes} passed, {rep.flags} flagged, {rep.fails} failed")
     return 1 if rep.fails else 0

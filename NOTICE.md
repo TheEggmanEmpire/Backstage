@@ -77,6 +77,22 @@ them at build time with upstream's own `tool/sync_droiddeck_linuxfs.sh` from Dro
 pins in `android/app/src/main/resources/moe/n4tsu/dextop/linux/droiddeck/source.env`; that DroidDeck commit
 is part of the corresponding source of the APK.
 
+### Google Play version: native libraries rebuilt with 16 KB page alignment
+
+This applies to the Google Play version only. Google Play rejects native libraries without 16 KB ELF page alignment,
+and upstream Dextop's prebuilt PulseAudio stack and DD-Turnip driver use 4 KB. The Google Play version therefore
+packages Backstage's own builds of these files instead, made by `scripts/build-native-16k.sh` from the sources below
+(pinned by SHA-256 in that script and in [`licenses/third-party-sources.tsv`](licenses/third-party-sources.tsv)) into
+`backstage/native-16k/`. The GitHub version packages upstream's prebuilt files listed above, unchanged.
+
+| Binary | Corresponding source |
+|---|---|
+| `libvulkan_dextop_turnip.so` (DD-Turnip v0.2.0: Mesa MIT, patch set GPL-3.0) | `DD-Turnip-v0.2.0-source.tar.xz` (Droid-Deck/Drivers-CI release DD-Turnip-v0.2.0): Mesa `bffd919` with the DD-Turnip patch set, built with the options of its `scripts/build_android.sh` |
+| `libpulse.so`, `libpulseaudio.so`, `libpulsecommon-13.0.so`, `libpulsecore-13.0.so`, `libprotocol-native.so`, `module-native-protocol-tcp.so` (PulseAudio 13.0, LGPL-2.1-or-later) | `pulseaudio-13.0.tar.xz` with `scripts/native-16k/pulseaudio-13.0-atomic-cast.patch` (PulseAudio commit `e4450d8b`) |
+| `module-directaudio-native-sink.so` | `upstream/dextop/third_party/deck-audio/` built against the PulseAudio 13.0 build above |
+| `libsndfile.so` (LGPL-2.1-or-later) | `libsndfile-1.0.31.tar.bz2` |
+| `libltdl.so` (LGPL-2.1-or-later) | `libtool-2.4.7.tar.xz` (`libltdl/`) |
+
 ### OMP runtime (GitHub flavor only)
 
 The bundled versions and artifact SHA-256s are in [`upstream/omp-termux/UPSTREAM.env`](upstream/omp-termux/UPSTREAM.env).

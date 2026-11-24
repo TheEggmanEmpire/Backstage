@@ -463,8 +463,50 @@ class VerifyCompanionTest(unittest.TestCase):
         self.assertIn("FAIL com.eggman.backstage.cardex: Backstage no longer builds or ships the Car Companion", out.getvalue())
 
 
-if __name__ == "__main__":
-    unittest.main()
+def elf_with_loads(*aligns):
+    """A minimal 64-bit little-endian ELF image with one PT_LOAD program header per alignment."""
+    header = bytearray(64)
+    header[:6] = b"\x7fELF\x02\x01"
+    header[32:40] = (64).to_bytes(8, "little")
+    header[54:56] = (56).to_bytes(2, "little")
+    header[56:58] = len(aligns).to_bytes(2, "little")
+    phdrs = b"".join((1).to_bytes(4, "little") + bytes(44) + a.to_bytes(8, "little") for a in aligns)
+    return bytes(header) + phdrs
+
+
+class VerifyPageAlignmentTest(unittest.TestCase):
+    def run_check(self, libs, package="com.eggman.backstage.play"):
+        with tempfile.TemporaryDirectory() as d:
+            apk = os.path.join(d, "x.apk")
+            with zipfile.ZipFile(apk, "w") as z:
+                for name, data in libs.items():
+                    z.writestr(name, data)
+            rep = va.Report()
+            with contextlib.redirect_stdout(io.StringIO()):
+                va.check_page_alignment(rep, apk, package)
+            return rep
+
+    def test_load_alignments_are_read(self):
+        self.assertEqual(va.elf_load_alignments(elf_with_loads(0x4000, 0x10000)), [0x4000, 0x10000])
+        self.assertEqual(va.elf_load_alignments(b"not an elf"), [])
+
+    def test_16k_libraries_pass(self):
+        rep = self.run_check({"lib/arm64-v8a/liba.so": elf_with_loads(0x4000, 0x4000),
+                              "lib/arm64-v8a/libb.so": elf_with_loads(0x10000)})
+        self.assertEqual(rep.fails, 0)
+
+    def test_4k_library_in_lib_fails(self):
+        rep = self.run_check({"lib/arm64-v8a/liba.so": elf_with_loads(0x4000),
+                              "lib/arm64-v8a/libold.so": elf_with_loads(0x1000, 0x1000)})
+        self.assertEqual(rep.fails, 1)
+
+    def test_github_version_is_not_judged(self):
+        rep = self.run_check({"lib/arm64-v8a/libold.so": elf_with_loads(0x1000)}, package="com.eggman.backstage")
+        self.assertEqual(rep.fails, 0)
+
+    def test_libraries_outside_lib_are_not_judged(self):
+        rep = self.run_check({"assets/modules/libold.so": elf_with_loads(0x1000)})
+        self.assertEqual(rep.fails, 0)
 
 
 class SignerParsingTest(unittest.TestCase):
@@ -514,3 +556,7 @@ class SignerParsingTest(unittest.TestCase):
 
     def test_no_signer_lines(self):
         self.assertEqual(va.parse_signers("Verifies\n"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
