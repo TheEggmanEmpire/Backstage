@@ -19,9 +19,15 @@ data class ProviderConfig(
     val userAgent: String = "Backstage",
     /** The ChatGPT sign-in, for [ProviderId.CHATGPT] only. */
     val chatGpt: ChatGptSession? = null,
+    /** [ProviderId.FREE]: the enabled free models, best first (Free Auto's order). */
+    val freeCandidates: List<FreeModels.Candidate> = emptyList(),
+    /** [ProviderId.FREE] switched off in Settings. */
+    val switchedOff: Boolean = false,
 ) {
     /** Null when usable, else a remediation text. */
     fun problem(requireModel: Boolean = true): String? = when {
+        switchedOff -> "${provider.label} are switched off (Settings → AI provider)."
+        provider == ProviderId.FREE && model.isNotBlank() && !FreeModels.isFreeId(model) -> "Unknown free model '$model'. Pick one in Settings → AI provider."
         provider == ProviderId.CHATGPT && (chatGpt == null || apiKey.isBlank()) -> "Not signed in to ChatGPT (Settings → AI provider → Sign in with ChatGPT)."
         provider.requiresKey && apiKey.isBlank() -> "No API key set for ${provider.label} (Settings → AI provider)."
         provider == ProviderId.CUSTOM && baseUrl.isBlank() -> "Enter the chat-completions URL of your OpenAI-compatible endpoint."
@@ -62,6 +68,12 @@ object LlmFactory {
                 OpenCodeFamily.CHAT -> OpenAiCompatClient(config.provider, config.baseUrl, config.apiKey, config.model, config.vision, http,
                     reasoningEffort = config.reasoningEffort, extraHeaders = headers)
             }
+        }
+        if (config.provider == ProviderId.FREE) {
+            val one: (FreeModels.Candidate, Boolean) -> LlmClient = { c, vision -> OpenAiCompatClient(ProviderId.FREE, c.base, "", c.model, vision, http) }
+            if (config.model == FreeModels.AUTO) return FreeAutoClient(config.freeCandidates, config.vision, one)
+            val r = FreeModels.route(config.model)!!
+            return OpenAiCompatClient(ProviderId.FREE, r.lane.base, "", r.model, config.vision, http)
         }
         if (config.provider == ProviderId.CHATGPT) {
             return ChatGptClient(config.model, config.chatGpt!!, config.baseUrl, config.vision, http,

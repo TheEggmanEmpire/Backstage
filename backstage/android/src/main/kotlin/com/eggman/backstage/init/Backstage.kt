@@ -86,6 +86,7 @@ object Backstage {
         // MCP settings take effect at once, whoever writes them (settings page, store, restore): enabling starts the
         // server, disabling stops it, a new port or LAN choice rebinds it.
         val settings = environment.settings
+        settings.initFreeModels()
         settings.observe { key -> if (key in Settings.MCP_SERVER_KEYS) AgentService.mcpSettingsChanged(context, settings.mcpEnabled) }
         if (PLAY_DISTRIBUTION) DistributionAccessibility.connect(context)
         else com.eggman.backstage.omp.OmpHarness.initialize(context, settings)

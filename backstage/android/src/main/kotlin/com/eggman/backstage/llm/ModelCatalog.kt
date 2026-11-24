@@ -137,6 +137,17 @@ class ModelCatalog(
                     )
                 })
             }
+            ProviderId.FREE -> {
+                // Both lanes; one being down still lists the other.
+                val errors = ArrayList<String>()
+                val models = FreeModels.LANES.flatMap { lane ->
+                    try { FreeModels.parseCatalog(lane, get("${lane.base}/models", emptyMap())) }
+                    catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                    catch (e: Exception) { errors += "${lane.label}: ${e.message}"; emptyList() }
+                }
+                if (models.isEmpty() && errors.isNotEmpty()) ModelListResult.Unavailable(errors.joinToString("; "))
+                else ModelListResult.Loaded(models.sortedBy { it.id.lowercase() })
+            }
             // No model list for subscription sign-ins: the catalog's recommendations are the choices.
             ProviderId.CHATGPT -> ModelListResult.Loaded(c.provider.recommended)
             ProviderId.OLLAMA -> {

@@ -110,8 +110,34 @@ class Settings(private val p: KeyValueStore, private val secrets: SecretCipher =
 
     // ---- provider -----------------------------------------------------------------------------
     var provider: Provider
-        get() = Provider.parse(p.getString("provider")) ?: Provider.ANTHROPIC
+        get() = Provider.parse(p.getString("provider")) ?: if (nothingConfigured()) Provider.FREE else Provider.ANTHROPIC
         set(v) = p.putString("provider", v.name)
+
+    /** No provider chosen, no key and no ChatGPT sign-in: a fresh install. */
+    private fun nothingConfigured(): Boolean = p.getString("provider") == null &&
+        Provider.entries.none { it != Provider.FREE && p.getString("key_${it.name}")?.let { k -> secrets.decrypt(k) }.orEmpty().isNotBlank() }
+
+    /**
+     * The built-in Free models provider. On for a fresh install (where it is the default provider, with Free Auto
+     * as the model), off for an installation that already had a provider. [initFreeModels] fixes the choice once.
+     */
+    var freeModelsEnabled: Boolean
+        get() = p.getString("free_enabled")?.toBooleanStrictOrNull() ?: nothingConfigured()
+        set(v) = p.putString("free_enabled", v.toString())
+
+    /** Stores the fresh-install decision, so adding a key later does not switch Free models off. */
+    fun initFreeModels() {
+        if (p.getString("free_enabled") != null) return
+        val fresh = nothingConfigured()
+        freeModelsEnabled = fresh
+        if (fresh) provider = Provider.FREE
+    }
+
+    /** Free Auto's order: the enabled free models, best first, with what their model lists reported. */
+    fun freeAutoRank(): List<com.eggman.backstage.llm.FreeModels.Candidate> =
+        com.eggman.backstage.llm.FreeModels.rank(enabledModels(Provider.FREE)) {
+            com.eggman.backstage.llm.FreeModels.Caps(detectedContext(Provider.FREE, it), detectedCapability(Provider.FREE, it, "vision"))
+        }
 
     /** For [Provider.CHATGPT] the current access token of the sign-in (blank = signed out). */
     fun apiKey(provider: Provider = this.provider): String =
@@ -217,6 +243,8 @@ class Settings(private val p: KeyValueStore, private val secrets: SecretCipher =
     fun contextWindow(provider: Provider = this.provider): Long =
         contextOverride(provider)
             ?: detectedContext(provider, model(provider))
+            ?: (if (provider == Provider.FREE && model(provider) == com.eggman.backstage.llm.FreeModels.AUTO)
+                com.eggman.backstage.llm.FreeModels.autoContext(freeAutoRank(), provider.defaultContext) else null)
             ?: provider.recommendedInfo(model(provider))?.context
             ?: provider.defaultContext
     fun setContextWindow(provider: Provider, tokens: Long?) = p.putString("ctx_${provider.name}", tokens?.takeIf { it > 0 }?.toString())
@@ -248,6 +276,8 @@ class Settings(private val p: KeyValueStore, private val secrets: SecretCipher =
         reasoningEffort = reasoningEffort(provider),
         userAgent = "Backstage/$appVersion",
         chatGpt = if (provider == Provider.CHATGPT) chatGptSession else null,
+        freeCandidates = if (provider == Provider.FREE) freeAutoRank() else emptyList(),
+        switchedOff = provider == Provider.FREE && !freeModelsEnabled,
     )
 
     /** Filled in at process start (User-Agent for providers that want one). */

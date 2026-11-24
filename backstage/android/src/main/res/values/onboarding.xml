@@ -25,6 +25,7 @@
     <string name="onboarding_provider_ready">%1$s ready</string>
     <string name="onboarding_provider_missing">Add an API key or sign in to ChatGPT to continue.</string>
     <string name="onboarding_chatgpt">Sign in with ChatGPT (paid plan)</string>
+    <string name="onboarding_free_models">Free models (no account)</string>
     <string name="onboarding_use_key">Use your own API key (BYOK)</string>
     <string name="onboarding_choose_model">Choose your model</string>
     <string name="onboarding_model_hint">Please select a model for your agent. You can change it later in Settings.</string>

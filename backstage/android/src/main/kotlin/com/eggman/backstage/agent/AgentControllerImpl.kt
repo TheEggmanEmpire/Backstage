@@ -716,7 +716,7 @@ class AgentControllerImpl(
                 if (engineChoice == com.eggman.backstage.data.AgentEngine.OMP) {
                     usedOmp = true
                     usingOmp = true
-                    val result = ompEngine.run(conv, "${com.eggman.backstage.omp.OmpConfig.providerId(settings.provider)}/${settings.model()}",
+                    val result = ompEngine.run(conv, com.eggman.backstage.omp.OmpConfig.mainModelId(settings),
                         registry, loopConfig, channel, toolCtx, loopListener, conv.messages,
                         displayRedactor = activeDisplayRedactor ?: OmpDisplayRedactor.DEFAULT)
                     if (result != null) result else {

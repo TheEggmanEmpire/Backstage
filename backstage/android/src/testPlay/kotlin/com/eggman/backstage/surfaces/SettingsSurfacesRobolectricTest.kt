@@ -133,7 +133,7 @@ class SettingsSurfacesRobolectricTest {
     @Test fun onboardingModelSelectionBecomesTheActiveMainModel() = MockWebServer().use { models ->
         models.start()
         models.enqueue(MockResponse().setBody("""{"data":[{"id":"onboarding-test-model","display_name":"Onboarding test"}]}"""))
-        val settings = Settings(app)
+        val settings = Settings(app).apply { provider = com.eggman.backstage.data.Provider.ANTHROPIC }
         val env = AndroidAgentEnvironment(app)
         val previousHost = DesktopHosts.current
         val mirrorService = "com.eggman.backstage.play/moe.n4tsu.dextop.MirrorService"

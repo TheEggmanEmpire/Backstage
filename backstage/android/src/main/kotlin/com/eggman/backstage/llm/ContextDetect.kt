@@ -16,7 +16,7 @@ object ContextDetect {
     private val catalog by lazy { ModelCatalog() }
 
     /** Providers whose model list reports capabilities rather than guessing them from the id. */
-    val ADVERTISES = setOf(Provider.ANTHROPIC, Provider.GEMINI, Provider.OPENROUTER, Provider.VENICE)
+    val ADVERTISES = setOf(Provider.FREE, Provider.ANTHROPIC, Provider.GEMINI, Provider.OPENROUTER, Provider.VENICE)
 
     data class Caps(val context: Long?, val vision: Boolean?, val tools: Boolean?)
 
@@ -59,8 +59,8 @@ object ContextDetect {
     /** Detect for every provider that has a key or a base URL configured (not just the current one). */
     suspend fun detectAll(settings: Settings, force: Boolean = false) {
         for (p in Provider.entries) {
-            val configured = p == settings.provider || settings.apiKey(p).isNotBlank() ||
-                (!p.requiresKey && settings.baseUrl(p).isNotBlank())
+            val configured = p == settings.provider || if (p == Provider.FREE) settings.freeModelsEnabled
+                else settings.apiKey(p).isNotBlank() || (!p.requiresKey && settings.baseUrl(p).isNotBlank())
             if (configured) runCatching { detect(settings, p, force) }
         }
     }

@@ -36,7 +36,7 @@ class SettingsStoreRobolectricTest {
 
     @Test fun defaultsOnAFreshInstall() {
         val s = Settings(app)
-        assertEquals(Provider.ANTHROPIC, s.provider)
+        assertEquals(Provider.ANTHROPIC, s.provider) // the test process pins a chosen, unconfigured provider
         assertEquals("", s.apiKey())
         assertFalse(s.mcpEnabled)
         assertEquals(Settings.DEFAULT_MCP_PORT, s.mcpPort)

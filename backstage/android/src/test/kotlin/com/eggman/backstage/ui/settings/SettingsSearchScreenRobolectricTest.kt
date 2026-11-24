@@ -24,7 +24,7 @@ class SettingsSearchScreenRobolectricTest {
     @Before fun isolateHost() { previousHost = DesktopHosts.current; DesktopHosts.current = null }
     @After fun restoreHost() { DesktopHosts.current = previousHost }
 
-    private val settings = Settings(MemoryStore())
+    private val settings = Settings(MemoryStore()).apply { provider = com.eggman.backstage.data.Provider.ANTHROPIC }
     private val store = object : BackstageSettingsStore by CoreSettingsStore(settings) {
         override suspend fun fetchModels(providerId: String, force: Boolean): ModelListResult =
             ModelListResult.Unavailable("Offline test")

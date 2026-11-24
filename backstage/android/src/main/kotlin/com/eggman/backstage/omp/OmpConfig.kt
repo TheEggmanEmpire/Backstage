@@ -9,7 +9,9 @@ import java.util.Locale
 object OmpConfig {
     data class Entry(val provider: Provider, val baseUrl: String, val model: String, val hasKey: Boolean,
         /** Known context window (custom: always; built-in: only an override or a detected value). */
-        val context: Long? = null, val maxTokens: Int? = null, val vision: Boolean? = null)
+        val context: Long? = null, val maxTokens: Int? = null, val vision: Boolean? = null,
+        /** omp provider id; free models use one per lane (`backstage-free-kilo`, `backstage-free-ovh`). */
+        val ompProvider: String = providerId(provider))
     data class Files(val models: String, val config: String, val mcp: String = "{\"mcpServers\":{}}", val instructions: String = Settings.DEFAULT_GLOBAL_INSTRUCTIONS)
 
     // omp 18.18.6 pi-catalog defaults (checked by scripts/tests/check_omp_config.py).
@@ -61,12 +63,13 @@ object OmpConfig {
                 "\"headers\":{\"Authorization\":${yaml("!backstage-omp-key $slug")}},\"enabled\":true}"
         }
     }
-    fun generate(entries: List<Entry>, current: Provider, model: String, remoteMcpServers: List<RemoteMcpServer> = emptyList()): Files {
+    fun generate(entries: List<Entry>, current: Provider, model: String, remoteMcpServers: List<RemoteMcpServer> = emptyList(),
+        mainId: String? = null): Files {
         val models = buildString {
             appendLine(if (entries.isEmpty()) "providers: {}" else "providers:")
-            for ((_, providerEntries) in entries.groupBy { it.provider }) {
+            for ((_, providerEntries) in entries.groupBy { it.ompProvider }) {
                 val e = providerEntries.first()
-                val id = providerId(e.provider)
+                val id = e.ompProvider
                 appendLine("  ${yaml(id)}:")
                 val custom = id.startsWith("backstage-")
                 if (custom) appendLine("    api: ${yaml("openai-completions")}")
@@ -106,9 +109,9 @@ object OmpConfig {
             }
         }
         // An overlay (backstage.yml): providers come from Backstage, so omp's first-run sign-in wizard is skipped.
-        val main = "${providerId(current)}/$model"
+        val main = mainId ?: "${providerId(current)}/$model"
         val enabled = (listOf(main).filter { model.isNotBlank() } + entries.filter { it.model.isNotBlank() }
-            .map { "${providerId(it.provider)}/${it.model}" }.sorted()).distinct()
+            .map { "${it.ompProvider}/${it.model}" }.sorted()).distinct()
         val config = buildString {
             if (model.isNotBlank()) {
                 appendLine("modelRoles:")
@@ -123,8 +126,29 @@ object OmpConfig {
         }
         return Files(models, config, mcp(remoteMcpServers))
     }
-    fun from(settings: Settings): Files = generate(Provider.entries.filter {
-        it == settings.provider || settings.apiKey(it).isNotBlank() || (!it.requiresKey && settings.baseUrl(it).isNotBlank())
+    /** Free models as omp sees them: one custom provider per lane. Free Auto has no omp equivalent (no failover there). */
+    private fun freeEntries(settings: Settings): List<Entry> = settings.enabledModels(Provider.FREE).sorted().mapNotNull { id ->
+        val r = com.eggman.backstage.llm.FreeModels.route(id) ?: return@mapNotNull null
+        Entry(Provider.FREE, r.lane.base, r.model, false, settings.detectedContext(Provider.FREE, id),
+            settings.maxOutputTokens, settings.detectedCapability(Provider.FREE, id, "vision"), "backstage-free-${r.lane.key}")
+    }
+
+    /** The chat's main model as an omp id (`provider/model`); for Free Auto, the free model it would try first. */
+    fun mainModelId(settings: Settings): String =
+        if (settings.provider == Provider.FREE) freeMain(settings) ?: "" else "${providerId(settings.provider)}/${settings.model()}"
+
+    private fun freeMain(settings: Settings): String? {
+        val id = settings.model(Provider.FREE).let { if (it == com.eggman.backstage.llm.FreeModels.AUTO) settings.freeAutoRank().firstOrNull()?.id else it }
+        val r = id?.let { com.eggman.backstage.llm.FreeModels.route(it) } ?: return null
+        return "backstage-free-${r.lane.key}/${r.model}"
+    }
+
+    fun from(settings: Settings): Files {
+        val freeOn = settings.freeModelsEnabled
+        val currentFree = settings.provider == Provider.FREE
+        val main = if (currentFree && freeOn) freeMain(settings) else null
+        return generate((if (freeOn) freeEntries(settings) else emptyList()) + Provider.entries.filter {
+        it != Provider.FREE && (it == settings.provider || settings.apiKey(it).isNotBlank() || (!it.requiresKey && settings.baseUrl(it).isNotBlank()))
     }.flatMap { provider ->
         val custom = providerId(provider).startsWith("backstage-")
         settings.enabledModels(provider).sorted().map { model ->
@@ -134,5 +158,7 @@ object OmpConfig {
             Entry(provider, settings.baseUrl(provider), model, settings.apiKey(provider).isNotBlank(), context,
                 if (custom) settings.maxOutputTokens else null, vision)
         }
-    }, settings.provider, settings.model(), settings.remoteMcpServers).copy(instructions = settings.effectiveGlobalInstructions())
+    }, settings.provider, if (currentFree && main == null) "" else settings.model(), settings.remoteMcpServers, main)
+        .copy(instructions = settings.effectiveGlobalInstructions())
+    }
 }

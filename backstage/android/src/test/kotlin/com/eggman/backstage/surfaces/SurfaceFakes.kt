@@ -41,4 +41,4 @@ class FakeAgent(initial: AgentState = AgentState()) : AgentController {
 }
 
 /** Settings backed by memory (no Android keystore in JVM tests). */
-fun memorySettings(): CoreSettingsStore = CoreSettingsStore(Settings(MemoryStore()))
+fun memorySettings(): CoreSettingsStore = CoreSettingsStore(Settings(MemoryStore()).apply { provider = com.eggman.backstage.data.Provider.ANTHROPIC })

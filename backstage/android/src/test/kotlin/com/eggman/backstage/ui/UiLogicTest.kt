@@ -101,7 +101,7 @@ class UiLogicTest {
     // ---- settings store -------------------------------------------------------------------
     @Test fun settingsDefaultsAndClamping() {
         val s = CoreSettingsStore(Settings(MemoryStore()))
-        assertEquals("ANTHROPIC", s.providerId)
+        assertEquals("FREE", s.providerId)
         assertEquals(CoreSettingsStore.DEFAULT_MCP_PORT, s.mcpPort)
         assertEquals(Target.DESKTOP, s.defaultTarget) // gated to the DeX desktop by default
         assertEquals(80, s.maxSteps) // 80 actions, clamped 20–200
@@ -110,7 +110,7 @@ class UiLogicTest {
         s.maxSteps = 1000; assertEquals(200, s.maxSteps)
         s.maxSteps = 10; assertEquals(20, s.maxSteps)
         s.mcpPort = 80; assertEquals(1024, s.mcpPort)
-        s.providerId = "BOGUS"; assertEquals("ANTHROPIC", s.providerId)
+        s.providerId = "BOGUS"; assertEquals("FREE", s.providerId)
         s.providerId = "OLLAMA"; assertEquals("qwen3-vl", s.model()); assertTrue(s.baseUrl().startsWith("http://"))
         s.setModel("OLLAMA", "  llava  "); assertEquals("llava", s.model("OLLAMA"))
         s.wakePhrase = "  "; assertEquals(CoreSettingsStore.DEFAULT_WAKE_PHRASE, s.wakePhrase)

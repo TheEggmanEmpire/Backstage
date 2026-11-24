@@ -391,7 +391,7 @@ internal fun ProviderSection(store: BackstageSettingsStore, apiKeyOnly: Boolean 
                 "Uses the installed OMP harness and privileged access. Falls back to Backstage when unavailable. omp's own shell tools run with shell-user access."
                 else "The native Backstage agent loop.", style = MaterialTheme.typography.bodySmall)
         }
-        val options = if (apiKeyOnly) ProviderOptions.all.filterNot { it.id == com.eggman.backstage.data.Provider.CHATGPT.name } else ProviderOptions.all
+        val options = if (apiKeyOnly) ProviderOptions.all.filterNot { it.id == com.eggman.backstage.data.Provider.CHATGPT.name || it.id == com.eggman.backstage.data.Provider.FREE.name } else ProviderOptions.all
         var providerId by remember(store) { mutableStateOf(store.providerId) }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             options.forEach { p ->
@@ -406,7 +406,9 @@ internal fun ProviderSection(store: BackstageSettingsStore, apiKeyOnly: Boolean 
             var url by remember { mutableStateOf(store.baseUrl(providerId)) }
             var showKey by remember { mutableStateOf(false) }
             if (option.note.isNotEmpty()) Text(option.note, style = MaterialTheme.typography.bodySmall)
-            if (providerId == com.eggman.backstage.data.Provider.CHATGPT.name) {
+            val free = providerId == com.eggman.backstage.data.Provider.FREE.name
+            if (free) FreeModelsBox(store)
+            else if (providerId == com.eggman.backstage.data.Provider.CHATGPT.name) {
                 ChatGptAccount(store) { apiKey = store.apiKey(providerId) }
             } else OutlinedTextField(apiKey, { apiKey = it; store.setApiKey(providerId, it) }, Modifier.fillMaxWidth(),
                 label = { Text(if (option.needsKey) "API key" else "API key (optional)") }, placeholder = { Text(option.keyHint) },
@@ -424,7 +426,7 @@ internal fun ProviderSection(store: BackstageSettingsStore, apiKeyOnly: Boolean 
             if (PLAY_DISTRIBUTION && !apiKeyOnly) TextButton(onClick = { showEndpoint = !showEndpoint }) {
                 Text(if (showEndpoint) "Hide advanced endpoint settings" else "Advanced endpoint settings")
             }
-            if (showEndpoint) OutlinedTextField(url, { url = it; store.setBaseUrl(providerId, it) }, Modifier.fillMaxWidth(),
+            if (showEndpoint && !free) OutlinedTextField(url, { url = it; store.setBaseUrl(providerId, it) }, Modifier.fillMaxWidth(),
                 label = { Text("Base URL") }, singleLine = true,
                 supportingText = {
                     if (PLAY_DISTRIBUTION) ModuleSettingsLogic.insecureWarning(url)?.let { Text(it) }
@@ -540,7 +542,13 @@ internal fun ProviderModelsSection(store: BackstageSettingsStore, providerId: St
                 androidx.compose.material3.RadioButton(modifier = Modifier.semantics { contentDescription = "Use $id as main model" }, selected = main == id, onClick = {
                     store.setModel(providerId, id); enabled = store.enabledModels(providerId); onMain(id)
                 }, enabled = id in enabled)
-                Text(id + if (main == id) " (main)" else "", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                Column(Modifier.weight(1f)) {
+                    val name = if (provider == com.eggman.backstage.data.Provider.FREE) com.eggman.backstage.llm.FreeModels.displayName(id) else id
+                    Text(name + if (main == id) " (main)" else "", style = MaterialTheme.typography.bodySmall)
+                    val info = loaded?.let { (it.models + it.hidden).firstOrNull { m -> m.id == id } }
+                    val known = store.modelCaps(providerId, id)
+                    ModelCapsHint(com.eggman.backstage.llm.FreeModels.Caps(info?.context ?: known.context, info?.vision ?: known.vision))
+                }
                 androidx.compose.material3.Switch(modifier = Modifier.semantics { contentDescription = "Enable $id" }, checked = id in enabled, onCheckedChange = { on ->
                     val unavailable = listed.isNotEmpty() && listed.none { com.eggman.backstage.data.ModelIds.same(it, main) }
                     val select = id.takeIf { on && (main !in enabled || unavailable) }

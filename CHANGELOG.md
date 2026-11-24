@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4
+
+- New **Free models** provider: free models from KiloCode and OVHcloud, no account or key. It can be switched off in Settings → AI provider. These providers may log prompts and use them for training.
+- **Free Auto** sends each request to the best enabled free model, ranked by intelligence score, context window and vision, and moves to the next one when a model is rate limited or fails (up to 3 times). Requests with screenshots skip text-only models. Settings shows the current order.
+- A fresh install starts with Free models and Free Auto, so tasks work before any provider is set up. Existing installations keep their provider; Free models start switched off there.
+- Model lists in Settings and setup show each model's context window and whether it accepts images.
+
 ## 1.0.3
 
 - Fixed updates failing with "INSTALL_FAILED_INTERNAL_ERROR: Session files in use": Android's install confirmation opens only once per update, either directly or from the notification, never both.

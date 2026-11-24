@@ -50,7 +50,7 @@ class GlobalInstructionsAndModelsTest {
 
     @Test fun clearingEnabledModelsPersistsAnUnconfiguredProvider() {
         val storage = MemoryStore()
-        val settings = Settings(storage).apply { setApiKey(provider, "test-key") }
+        val settings = Settings(storage).apply { provider = Provider.ANTHROPIC; setApiKey(provider, "test-key") }
         settings.setEnabledModels(settings.provider, emptySet())
         val reloaded = Settings(storage)
         assertEquals("", reloaded.model())

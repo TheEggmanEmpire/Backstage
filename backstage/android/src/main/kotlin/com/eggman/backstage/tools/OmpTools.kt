@@ -14,7 +14,7 @@ class OmpSubagentTool(
         jobs.status(jobs.create(task, model, cwd), wait)
     },
     private val defaultModel: () -> String = {
-        Backstage.environment.settings.let { "${OmpConfig.providerId(it.provider)}/${it.model()}" }
+        OmpConfig.mainModelId(Backstage.environment.settings)
     },
 ) : Tool {
     override val name = "omp_subagent"

@@ -487,6 +487,7 @@ class AgentControllerTest {
     @Test fun providerProblemFailsWithoutCallingModel() = runTest {
         val llm = ScriptedLlm(script(text("x")))
         val (c, env) = controller(llm)
+        env.settings.provider = Provider.ANTHROPIC
         env.settings.setApiKey(Provider.ANTHROPIC, "")
         val s = c.submit(TaskRequest("hi", Source.CHAT)).await()
         assertEquals(TaskStatus.FAILED, s.status)

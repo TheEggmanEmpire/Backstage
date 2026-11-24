@@ -41,6 +41,14 @@ interface BackstageSettingsStore {
     fun setModel(providerId: String, model: String)
     fun baseUrl(providerId: String = this.providerId): String
     fun setBaseUrl(providerId: String, url: String)
+    /** The built-in Free models provider is switched on. */
+    var freeModelsEnabled: Boolean
+        get() = true
+        set(@Suppress("UNUSED_PARAMETER") v) = Unit
+    /** Free Auto's current order (best first). */
+    fun freeAutoRank(): List<com.eggman.backstage.llm.FreeModels.Candidate> = emptyList()
+    /** Context window and image input the provider's model list reported for [model] (nulls = unknown). */
+    fun modelCaps(providerId: String, model: String): com.eggman.backstage.llm.FreeModels.Caps = com.eggman.backstage.llm.FreeModels.Caps()
     /** The ChatGPT sign-in (provider CHATGPT); null = signed out. */
     var chatGptTokens: com.eggman.backstage.llm.ChatGptTokens?
         get() = null
@@ -238,6 +246,16 @@ class CoreSettingsStore(private val s: Settings) : BackstageSettingsStore {
     override fun setModel(providerId: String, model: String) = s.setModel(provider(providerId), model)
     override fun baseUrl(providerId: String) = s.baseUrl(provider(providerId))
     override fun setBaseUrl(providerId: String, url: String) = s.setBaseUrl(provider(providerId), url)
+    override var freeModelsEnabled: Boolean get() = s.freeModelsEnabled; set(v) { s.freeModelsEnabled = v }
+    override fun freeAutoRank() = s.freeAutoRank()
+    override fun modelCaps(providerId: String, model: String): com.eggman.backstage.llm.FreeModels.Caps {
+        val p = provider(providerId)
+        val rec = p.recommendedInfo(model)
+        return com.eggman.backstage.llm.FreeModels.Caps(
+            s.detectedContext(p, model) ?: rec?.context,
+            s.detectedCapability(p, model, "vision") ?: rec?.vision,
+        )
+    }
 
     override var planMode: Boolean get() = s.planMode; set(v) { s.planMode = v }
     override var confirmActions: Boolean get() = s.confirmSensitive; set(v) { s.confirmSensitive = v }

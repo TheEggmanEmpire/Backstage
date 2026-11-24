@@ -89,8 +89,9 @@ Android 13+, arm64.
 3. Install and start [Stellar](https://github.com/roro2239/Stellar), or alternatively
    [Shizuku Plus](https://github.com/thejaustin/ShizukuPlus).
 4. Open Backstage and grant it access in Stellar (or Shizuku Plus).
-5. In Settings → AI provider, set an OpenAI-compatible server (base URL and API key) or sign in with ChatGPT
-   (paid plan).
+5. Backstage starts with **Free models** (no account; Free Auto picks the best free model). For your own
+   provider, open Settings → AI provider and set an OpenAI-compatible server (base URL and API key) or sign in
+   with ChatGPT (paid plan).
 6. Give the agent tasks in the Backstage app or from its notification.
 7. Optional: add skills, instructions and MCP servers for the agent.
 

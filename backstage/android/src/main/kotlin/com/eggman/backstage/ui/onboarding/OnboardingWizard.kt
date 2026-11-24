@@ -137,8 +137,9 @@ internal fun OnboardingWizard(
     }
     val provider = Provider.parse(store.providerId)
     fun credentialsReady() = when (choice) {
+        ProviderSetupChoice.FREE -> store.providerId == Provider.FREE.name && store.providerCredentialsConfigured()
         ProviderSetupChoice.CHATGPT -> store.providerId == Provider.CHATGPT.name && store.providerCredentialsConfigured()
-        ProviderSetupChoice.API_KEY -> store.providerId != Provider.CHATGPT.name && store.providerCredentialsConfigured()
+        ProviderSetupChoice.API_KEY -> store.providerId != Provider.CHATGPT.name && store.providerId != Provider.FREE.name && store.providerCredentialsConfigured()
         null -> false
     }
     fun modelReady() = chosenProvider == store.providerId && chosenModel == store.model() && store.providerConfigured()
@@ -346,7 +347,7 @@ private fun DesktopAccessibilityStep(
     }
 }
 
-private enum class ProviderSetupChoice { CHATGPT, API_KEY }
+private enum class ProviderSetupChoice { FREE, CHATGPT, API_KEY }
 
 @Composable
 private fun ProviderSetup(store: BackstageSettingsStore, choice: ProviderSetupChoice?, choose: (ProviderSetupChoice) -> Unit) {
@@ -357,6 +358,11 @@ private fun ProviderSetup(store: BackstageSettingsStore, choice: ProviderSetupCh
         }
     }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = choice == ProviderSetupChoice.FREE,
+            onClick = { choose(ProviderSetupChoice.FREE); store.freeModelsEnabled = true; store.providerId = Provider.FREE.name },
+            label = { Text(stringResource(R.string.onboarding_free_models)) },
+        )
         FilterChip(
             selected = choice == ProviderSetupChoice.CHATGPT,
             onClick = { choose(ProviderSetupChoice.CHATGPT); selectChatGpt() },
@@ -369,6 +375,7 @@ private fun ProviderSetup(store: BackstageSettingsStore, choice: ProviderSetupCh
         )
     }
     when (choice) {
+        ProviderSetupChoice.FREE -> com.eggman.backstage.ui.settings.FreeModelsBox(store)
         ProviderSetupChoice.CHATGPT -> ChatGptAccount(store, onChanged = ::selectChatGpt)
         ProviderSetupChoice.API_KEY -> ProviderSection(store, apiKeyOnly = true, credentialsOnly = BuildConfig.PLAY_DISTRIBUTION)
         null -> Unit
@@ -388,7 +395,8 @@ private fun ModelSetup(store: BackstageSettingsStore, provider: Provider, select
     }
     val listed = (result as? ModelListResult.Loaded)?.let { it.models + it.hidden }
     val loading = (provider.canListModels || provider == Provider.CHATGPT) && result == null
-    val models = (listed?.map { it.id } ?: if (loading) emptyList() else provider.suggestedModels)
+    val models = (if (provider == Provider.FREE) listOf(com.eggman.backstage.llm.FreeModels.AUTO) else emptyList<String>())
+        .plus(listed?.map { it.id } ?: if (loading) emptyList() else provider.suggestedModels)
         .plus(listOfNotNull(selected)).filter(String::isNotBlank).distinct()
 
     Card(Modifier.fillMaxWidth()) {
@@ -413,7 +421,12 @@ private fun ModelSetup(store: BackstageSettingsStore, provider: Provider, select
                     Row(Modifier.fillMaxWidth().selectable(selected == model, role = Role.RadioButton, onClick = { onSelect(model) }).padding(vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         RadioButton(selected == model, onClick = null)
-                        Text(model)
+                        Column {
+                            Text(if (provider == Provider.FREE) com.eggman.backstage.llm.FreeModels.displayName(model) else model)
+                            val info = listed?.firstOrNull { it.id == model }
+                            val known = store.modelCaps(id, model)
+                            com.eggman.backstage.ui.settings.ModelCapsHint(com.eggman.backstage.llm.FreeModels.Caps(info?.context ?: known.context, info?.vision ?: known.vision))
+                        }
                     }
                 }
             }

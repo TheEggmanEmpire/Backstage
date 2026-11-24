@@ -51,6 +51,10 @@ object RoboSupport {
         Schedules::class.java.getDeclaredField("engine").apply { isAccessible = true }.set(null, null)
         // Whatever the last test's MCP server reported (running, or a bind error) belongs to that test.
         McpServerStatus.publish(McpServerState())
+        // An installation with a provider chosen but no key: tasks must fail without network calls
+        // (a fresh install would default to the online Free models).
+        org.robolectric.RuntimeEnvironment.getApplication().getSharedPreferences(com.eggman.backstage.data.Settings.PREFS, android.content.Context.MODE_PRIVATE)
+            .edit().putString("provider", "ANTHROPIC").commit()
     }
 
     /** A loopback port that is free (the MCP port setting must be 1024..65535, so 0 is not an option). */

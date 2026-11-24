@@ -19,9 +19,11 @@ import org.junit.Test
 class DataTest {
     @Test fun settingsDefaultsAndProviderConfig() {
         val s = Settings(MemoryStore())
-        assertEquals(Provider.ANTHROPIC, s.provider)
+        assertEquals(Provider.FREE, s.provider) // fresh install: Free models, Free Auto
+        assertTrue(s.providerConfigured())
         assertEquals(Settings.DEFAULT_MCP_PORT, s.mcpPort)
         assertEquals(8485, s.mcpPort)
+        s.provider = Provider.ANTHROPIC
         assertFalse(s.providerConfigured())
         s.setApiKey(Provider.ANTHROPIC, "  sk-1  ")
         assertEquals("sk-1", s.apiKey())

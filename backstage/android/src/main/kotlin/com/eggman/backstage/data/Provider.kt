@@ -37,6 +37,17 @@ enum class Provider(
     /** Context window assumed when the model's own value is unknown. */
     val defaultContext: Long = 128_000,
 ) {
+    /**
+     * Keyless free tiers ([com.eggman.backstage.llm.FreeModels]): no account or key. Can be switched off, never
+     * removed. The default provider while no other one is set up, with Free Auto as the model.
+     */
+    FREE(
+        "Free models", com.eggman.backstage.llm.FreeModels.KILO.base, com.eggman.backstage.llm.FreeModels.AUTO,
+        requiresKey = false, visionByDefault = false, recommended = com.eggman.backstage.llm.FreeModels.SEED_INFO,
+        keyHint = "No account or key needed",
+        tagline = "Free models from KiloCode and OVHcloud, no account. They may log prompts and use them for training: don't send sensitive data.",
+        hostedCatalog = false, canListModels = true,
+    ),
     ANTHROPIC(
         "Anthropic Claude", "https://api.anthropic.com", "claude-sonnet-5", anthropicFormat = true,
         recommended = listOf(
@@ -132,6 +143,7 @@ enum class Provider(
                 "google" -> GEMINI
                 "chatgpt", "gpt" -> OPENAI
                 "opencode go" -> OPENCODE
+                "free", "freeflow" -> FREE
                 else -> null
             }
     }

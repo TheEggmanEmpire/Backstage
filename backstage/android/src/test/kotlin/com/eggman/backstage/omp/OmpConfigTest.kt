@@ -125,7 +125,7 @@ class OmpConfigTest {
         assertNull(OmpHarness.mcpKey(slug, servers.map { it.copy(token = "") }))
     }
     @Test fun everyProviderMapsAndNeverContainsASecret() {
-        val ids = listOf("anthropic", "openai", "openai-codex", "google", "openrouter", "deepseek", "backstage-ollama", "backstage-custom", "backstage-venice", "backstage-opencode")
+        val ids = listOf("backstage-free", "anthropic", "openai", "openai-codex", "google", "openrouter", "deepseek", "backstage-ollama", "backstage-custom", "backstage-venice", "backstage-opencode")
         assertEquals(ids.toSet(), Provider.entries.map { OmpConfig.providerId(it) }.toSet())
         for (p in Provider.entries) {
             val c = OmpConfig.generate(listOf(OmpConfig.Entry(p, p.defaultBaseUrl, "test/model", true)), p, "test/model")
