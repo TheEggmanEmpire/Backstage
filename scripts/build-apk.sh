@@ -203,6 +203,17 @@ if [[ "$flavor" == play && "$type" == release ]]; then
   cp "$bundle" "$DIST/$bundle_name"
   produced+=("$bundle_name")
   log "wrote dist/$bundle_name"
+  # Play Console: the R8 deobfuscation file and the native debug symbols of exactly this bundle, for upload on
+  # its version (App bundle explorer > Downloads). Both are also embedded in the bundle's BUNDLE-METADATA.
+  mapping="$WORK/build/app/outputs/mapping/playRelease/mapping.txt"
+  symbols="$WORK/build/app/outputs/native-debug-symbols/playRelease/native-debug-symbols.zip"
+  [[ -f "$mapping" ]] || die "missing $mapping"
+  unzip -p "$bundle" BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map | cmp -s - "$mapping" ||
+    die "$mapping does not belong to $bundle"
+  [[ -f "$symbols" ]] || die "missing $symbols"
+  cp "$mapping" "$DIST/$prefix-$version_name-mapping.txt"
+  cp "$symbols" "$DIST/$prefix-$version_name-native-debug-symbols.zip"
+  log "wrote dist/$prefix-$version_name-mapping.txt and dist/$prefix-$version_name-native-debug-symbols.zip"
 fi
 write_checksums "${produced[@]}"
 log "wrote ${#produced[@]} artifact(s); total $((SECONDS - start))s"

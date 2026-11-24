@@ -21,6 +21,8 @@
 /dist/*.apk.tmp
 /dist/*.idsig
 /dist/*.aab
+/dist/*-mapping.txt
+/dist/*-native-debug-symbols.zip
 # Local pre-release test builds (not a delivered release)
 /dist/next/
 
