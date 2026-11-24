@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3
+
+- Fixed updates failing with "INSTALL_FAILED_INTERNAL_ERROR: Session files in use": Android's install confirmation opens only once per update, either directly or from the notification, never both.
+- The update box in Settings → App info shows the new version as soon as one is found, also when the daily background check found it. It refreshes when the app returns to the foreground and when the page opens.
+
 ## 1.0.2
 
 - Black desktop recovery: before a task on the desktop (chat or scheduled), Backstage checks the desktop's picture and restarts the desktop when it runs but shows only black. During a task, the agent restarts it with `desktop_restart` as soon as a screenshot comes back black.

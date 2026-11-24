@@ -1,0 +1,128 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: User <kuettner@leonard-falk.com>
+Date: Tue, 24 Nov 2026 15:38:24 +0900
+Subject: [PATCH] update-status-refresh
+
+---
+ lib/home_screen.dart             | 10 ++++++++-
+ lib/settings_screen.dart         | 37 +++++++++++++++++++-------------
+ test/backstage_updater_test.dart | 10 +++++++++
+ 3 files changed, 41 insertions(+), 16 deletions(-)
+
+diff --git a/lib/home_screen.dart b/lib/home_screen.dart
+index 63020d00c21ffbd96f56011121acdef07b3282e5..b75585c10bae18239411f4b9e076ac977e44208e 100644
+--- a/lib/home_screen.dart
++++ b/lib/home_screen.dart
+@@ -355,6 +355,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+   String? latestReleaseUrl;
+   String? releaseCheckError;
+   DateTime? releaseCheckedAt;
++  /// Bumped on every change of the update state: pages pushed above Home rebuild from it.
++  final releaseState = ValueNotifier<int>(0);
+   bool get updateAvailable => latestReleaseVersion != null;
+   var secureSettingsGranted = false;
+   String? error;
+@@ -626,6 +628,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+         releaseCheckSucceeded = false;
+         releaseCheckError = null;
+       });
++      releaseState.value++;
+     }
+     try {
+       final result = await BackstageShellBridge.invoke<Map>(
+@@ -655,7 +658,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+         });
+       }
+     } finally {
+-      if (mounted) mutate(() => releaseChecking = false);
++      if (mounted) {
++        mutate(() => releaseChecking = false);
++        releaseState.value++;
++      }
+     }
+   }
+ 
+@@ -883,6 +889,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+     pinResultSubscription?.cancel();
+     shortcutActionSubscription?.cancel();
+     WidgetsBinding.instance.removeObserver(this);
++    releaseState.dispose();
+     super.dispose();
+   }
+ 
+@@ -891,6 +898,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+     if (state == AppLifecycleState.resumed) {
+       backstagePageSelected(page);
+       refresh();
++      unawaited(_checkForUpdates());
+       _consumeTileAction();
+       _consumeShortcutAction();
+       if (profiles.isNotEmpty) {
+diff --git a/lib/settings_screen.dart b/lib/settings_screen.dart
+index 4e0b1a77e884fa73f2212de68c18173b747d2f56..28bc1b3f4b3e87abefa3fb879886f44c02a81744 100644
+--- a/lib/settings_screen.dart
++++ b/lib/settings_screen.dart
+@@ -89,22 +89,29 @@ extension _SettingsContent on _HomeScreenState {
+                   Icons.info_outline_rounded,
+                   l.appInfo,
+                   appVersion.isEmpty ? 'Dextop' : 'Dextop $appVersion',
+-                  () => Navigator.of(context).push(
+-                    MaterialPageRoute<void>(
+-                      builder: (_) => AppInfoPage(
+-                        bridge: bridge,
+-                        appVersion: appVersion,
+-                        updateAvailable: updateAvailable,
+-                        checking: releaseChecking,
+-                        checkSucceeded: releaseCheckSucceeded,
+-                        checkError: releaseCheckError,
+-                        onCheck: () => _checkForUpdates(manual: true),
+-                        onShowUpdate: _showUpdateDialog,
+-                        isRunning: active,
+-                        onExperimentalFeaturesChanged: _loadHomeSelections,
++                  () {
++                    // The page shows Home's live update state and syncs it with the native updater on open.
++                    unawaited(_checkForUpdates());
++                    Navigator.of(context).push(
++                      MaterialPageRoute<void>(
++                        builder: (_) => ValueListenableBuilder<int>(
++                          valueListenable: releaseState,
++                          builder: (_, _, _) => AppInfoPage(
++                            bridge: bridge,
++                            appVersion: appVersion,
++                            updateAvailable: updateAvailable,
++                            checking: releaseChecking,
++                            checkSucceeded: releaseCheckSucceeded,
++                            checkError: releaseCheckError,
++                            onCheck: () => _checkForUpdates(manual: true),
++                            onShowUpdate: _showUpdateDialog,
++                            isRunning: active,
++                            onExperimentalFeaturesChanged: _loadHomeSelections,
++                          ),
++                        ),
+                       ),
+-                    ),
+-                  ),
++                    );
++                  },
+                   badge: updateAvailable ? l.updateAvailable : null,
+                 ),
+               ]),
+diff --git a/test/backstage_updater_test.dart b/test/backstage_updater_test.dart
+index 26d27af62bf2ee5153bcbef5db0d4ec647ca1a59..a0c9373677e816f7ee39a22438b7558f7815ffbe 100644
+--- a/test/backstage_updater_test.dart
++++ b/test/backstage_updater_test.dart
+@@ -15,4 +15,14 @@ void main() {
+     expect(dialog, isNot(contains('bridge.openUrl')));
+     expect(source, isNot(contains('_isNewerVersion')));
+   });
++
++  test('App info shows the live update state', () {
++    final home = File('lib/home_screen.dart').readAsStringSync();
++    final settings = File('lib/settings_screen.dart').readAsStringSync();
++    final resume = home.substring(home.indexOf('void didChangeAppLifecycleState'));
++    expect(resume.substring(0, resume.indexOf('}')), contains('_checkForUpdates()'));
++    final route = settings.substring(settings.indexOf('l.appInfo,'), settings.indexOf('badge: updateAvailable'));
++    expect(route, contains('valueListenable: releaseState'));
++    expect(route, contains('unawaited(_checkForUpdates())'));
++  });
+ }

@@ -153,6 +153,22 @@ class UpdaterRobolectricTest {
         UpdateInstaller.cancel(app, repo)
     }
 
+    @Test fun anApprovedSessionIsNotConfirmedASecondTime() {
+        val (repo, id) = session(true)
+        AppUpdates::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, repo)
+        val open = Intent(app, UpdateConfirmationActivity::class.java).setAction(UpdateInstaller.CONFIRM)
+            .setData(android.net.Uri.parse(repo.prefs.getString("sessionToken", "")))
+            .putExtra(Intent.EXTRA_INTENT, Intent("android.content.pm.action.CONFIRM_INSTALL"))
+        val first = Robolectric.buildActivity(UpdateConfirmationActivity::class.java, open).setup().get()
+        assertEquals("android.content.pm.action.CONFIRM_INSTALL", shadowOf(first).nextStartedActivity?.action)
+        // Approved: Android installs the session, which is active again.
+        shadowOf(app.packageManager.packageInstaller).setSessionActiveState(id, true)
+        val second = Robolectric.buildActivity(UpdateConfirmationActivity::class.java, open).setup().get()
+        assertNull(shadowOf(second).nextStartedActivity)
+        assertEquals(UpdatePhase.PENDING, repo.state.value.phase)
+        UpdateInstaller.cancel(app, repo)
+    }
+
     @Test fun cancellingBlockedNetworkIoDoesNotPostFailureNotification() {
         seed()
         val repo = AppUpdates.repository(app)

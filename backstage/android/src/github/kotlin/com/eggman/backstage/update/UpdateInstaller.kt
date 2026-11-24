@@ -114,6 +114,10 @@ internal object UpdateInstaller {
         val expired = System.currentTimeMillis() - repo.prefs.getLong("sessionAt", 0) > UpdatePolicy.DAY
         val resume = Intent(context, UpdateConfirmationActivity::class.java).setAction(CONFIRM)
             .setData(Uri.parse(repo.prefs.getString("sessionToken", ""))).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (!updated && !expired && info?.isCommitted == true && repo.prefs.getString("sessionConfirmed", null) != null && info.isActive) {
+            repo.change { it.copy(phase = UpdatePhase.PENDING, message = "Android is installing the update.") }
+            return
+        }
         val confirmation = if (!updated && info?.isCommitted == true && !expired)
             PendingIntent.getActivity(context, id, resume, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)
         else null
@@ -138,7 +142,11 @@ internal object UpdateInstaller {
         repo.failed("Installation cancelled. Tap Update to download again.")
         UpdateNotifications.clear(context)
     }
-    fun clearSession(repo: UpdateRepository) { repo.prefs.edit().remove("session").remove("sessionToken").remove("sessionAt").remove("sessionVersionCode").remove("sessionApprovedTask").apply() }
+    /** Android is installing session [id]: it was approved and is active again. */
+    fun installing(context: Context, id: Int): Boolean =
+        id >= 0 && runCatching { context.packageManager.packageInstaller.getSessionInfo(id)?.isActive == true }.getOrDefault(false)
+
+    fun clearSession(repo: UpdateRepository) { repo.prefs.edit().remove("session").remove("sessionConfirmed").remove("sessionToken").remove("sessionAt").remove("sessionVersionCode").remove("sessionApprovedTask").apply() }
 }
 
 class UpdateStatusReceiver : BroadcastReceiver() {
@@ -162,9 +170,10 @@ class UpdateStatusReceiver : BroadcastReceiver() {
                 val pending = PendingIntent.getActivity(context, id, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                 repo.change { it.copy(phase = UpdatePhase.PENDING, message = "Confirm the update in Android's installer.") }
                 UpdateConfirmationActivity.pending = pending
-                UpdateNotifications.notice(context, "Tap to confirm installation in Android.", pending)
-                // A visible Agent UI can show the result. Background completion uses a notification.
-                if (com.eggman.backstage.notify.TaskNotifier.appVisible) runCatching { pending.send() }
+                // One way into the confirmation: open it directly when Backstage is visible, otherwise a notification.
+                // A second approval of the same session makes Android fail the install ("Session files in use").
+                val shown = com.eggman.backstage.notify.TaskNotifier.appVisible && runCatching { pending.send() }.isSuccess
+                if (!shown) UpdateNotifications.notice(context, "Tap to confirm installation in Android.", pending)
             }
             else -> {
                 UpdateInstaller.clearSession(repo)
@@ -187,8 +196,19 @@ class UpdateConfirmationActivity : ComponentActivity() {
         val repo = AppUpdates.repository(this)
         if (intent.action != UpdateInstaller.CONFIRM || intent.dataString != repo.prefs.getString("sessionToken", null)) { finish(); return }
         val confirmation = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java) ?: run { finish(); return }
+        val id = repo.prefs.getInt("session", -1)
+        val token = intent.dataString
+        // Each session is approved once. After an approval Android is installing (the session is active again);
+        // opening the confirmation a second time then would make the install fail.
+        if (repo.prefs.getString("sessionConfirmed", null) == token && UpdateInstaller.installing(this, id)) {
+            repo.change { it.copy(phase = UpdatePhase.PENDING, message = "Android is installing the update.") }
+            finish(); return
+        }
         fun launch() {
+            pending?.cancel()
             pending = null
+            UpdateNotifications.clear(this)
+            repo.prefs.edit().putString("sessionConfirmed", token).commit()
             runCatching { startActivity(confirmation) }.onFailure { repo.failed("Cannot open Android installer: ${it.message}") }
             finish()
         }
