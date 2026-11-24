@@ -103,6 +103,7 @@ fi
 
 # ------------------------------------------------------------------------------------------- build
 if [[ "$flavor" == companion ]]; then
+  "$ROOT/scripts/fetch-omp-payload.sh"
   task=assembleDebug
   [[ "$type" != release ]] || task=assembleRelease
   gradle_args=()
@@ -134,8 +135,8 @@ PYCODE
   exit 0
 fi
 
-if [[ "$flavor" == github || "$flavor" == companion ]]; then
-  if [[ "$flavor" == github && "${BACKSTAGE_SKIP_OMP:-0}" == 1 ]]; then
+if [[ "$flavor" == github ]]; then
+  if [[ "${BACKSTAGE_SKIP_OMP:-0}" == 1 ]]; then
     warn "BACKSTAGE_SKIP_OMP=1: debug APK will not include the OMP runtime"
   else
     "$ROOT/scripts/fetch-omp-payload.sh"
