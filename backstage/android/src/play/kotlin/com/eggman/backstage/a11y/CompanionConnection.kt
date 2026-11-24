@@ -15,6 +15,9 @@ import com.eggman.backstage.a11y.companion.CompanionSignatures
 import com.eggman.backstage.companion.CompanionEvent
 import com.eggman.backstage.companion.IAgentCallback
 import com.eggman.backstage.companion.IAgentCompanion
+import com.eggman.backstage.omp.CompanionOmpClient
+import com.eggman.backstage.ui.settings.CoreSettingsStore
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,15 +27,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 enum class CompanionState(val message: String) {
-    MISSING("Backstage Agent: companion missing. Install Backstage Agent from the project's GitHub releases, then open it and enable its accessibility service."),
-    SIGNATURE_MISMATCH("Backstage Agent: accessibility unavailable because the signing certificates differ. Install a companion signed with the same certificate as Backstage."),
-    PERMISSION_MISSING("Backstage Agent: this Backstage build lacks the companion accessibility signature permission. Update both apps from matching releases."),
-    CONNECTING("Backstage Agent: connecting to the verified accessibility companion."),
-    CONSENT_NEEDED("Backstage Agent: open the companion and accept or decline its screen and notification disclosure before enabling accessibility."),
-    SERVICE_OFF("Backstage Agent: service off. Open Backstage Agent and enable its accessibility service in Android Settings."),
-    CONNECTED("Backstage Agent: connected. Screen access is provided by the separate companion."),
-    INCOMPATIBLE("Backstage Agent update needed. Open Backstage Agent to check for an update."),
-    DISCONNECTED("Backstage Agent: accessibility connection lost. Reconnecting; actions that may have run are not repeated."),
+    MISSING("Backstage-play-agent: companion missing. Install Backstage-play-agent from the project's GitHub releases, then open it and enable its accessibility service."),
+    SIGNATURE_MISMATCH("Backstage-play-agent: accessibility unavailable because the signing certificates differ. Install a companion signed with the same certificate as Backstage."),
+    PERMISSION_MISSING("Backstage-play-agent: this Backstage build lacks the companion accessibility signature permission. Update both apps from matching releases."),
+    CONNECTING("Backstage-play-agent: connecting to the verified accessibility companion."),
+    CONSENT_NEEDED("Open Backstage-play-agent to confirm"),
+    SERVICE_OFF("Backstage-play-agent: service off. Open Backstage-play-agent and enable its accessibility service in Android Settings."),
+    CONNECTED("Backstage-play-agent: connected. Screen access is provided by the separate companion."),
+    INCOMPATIBLE("Backstage-play-agent update needed. Open Backstage-play-agent to check for an update."),
+    DISCONNECTED("Backstage-play-agent: accessibility connection lost. Reconnecting; actions that may have run are not repeated."),
 }
 
 /**
@@ -45,6 +48,8 @@ object CompanionConnection {
     private val lock = Any()
     private val _state = MutableStateFlow(CompanionState.MISSING)
     val state: StateFlow<CompanionState> = _state
+    private val _capabilities = MutableStateFlow(0)
+    val capabilities: StateFlow<Int> = _capabilities
     private val _updateAvailable = MutableStateFlow(false)
     val updateAvailable: StateFlow<Boolean> = _updateAvailable
     @Volatile var metadata: CompanionMetadata? = null
@@ -79,20 +84,28 @@ object CompanionConnection {
             val remote = b.remote ?: return
             try {
                 b.publishMetadata(remote.metadata())
-                b.publish(remote.status())
+                b.refreshStatus(remote)
+                b.syncAccessibilitySettings(remote)
+                b.syncOmpSettings(remote)
             } catch (_: Exception) { b.lost(CompanionState.DISCONNECTED) }
             return
         }
         val component = ComponentName(CompanionProtocol.PACKAGE, CompanionProtocol.SERVICE)
         val info = runCatching { context.packageManager.getServiceInfo(component, PackageManager.ComponentInfoFlags.of(0)) }.getOrNull()
+        val installed = info != null || runCatching {
+            context.packageManager.getPackageInfo(CompanionProtocol.PACKAGE, PackageManager.PackageInfoFlags.of(0))
+        }.isSuccess
         val failure = when {
-            info == null -> CompanionState.MISSING
+            !installed -> CompanionState.MISSING
             !CompanionSignatures.companionMatches(context) -> CompanionState.SIGNATURE_MISMATCH
-            info.permission != CompanionProtocol.PERMISSION || !info.exported || !info.enabled -> CompanionState.INCOMPATIBLE
+            info == null || info.permission != CompanionProtocol.PERMISSION || !info.exported || !info.enabled -> CompanionState.INCOMPATIBLE
             context.checkSelfPermission(CompanionProtocol.PERMISSION) != PackageManager.PERMISSION_GRANTED -> CompanionState.PERMISSION_MISSING
             else -> null
         }
-        if (failure != null) { _state.value = failure; return }
+        if (failure != null) {
+            synchronized(lock) { if (binding == null) _state.value = failure }
+            return
+        }
         val next = Binding(context, info!!.applicationInfo.uid)
         synchronized(lock) { if (binding != null) return; binding = next; _state.value = CompanionState.CONNECTING }
         try {
@@ -115,6 +128,32 @@ object CompanionConnection {
         private var binder: IBinder? = null
         private var backend: RemoteAccessibilityBackend? = null
         private var agent: AgentAccessibility? = null
+        private var statusRevision = 0L
+        private var protocolVersion = CompanionProtocol.MIN_VERSION
+        private val settings by lazy { com.eggman.backstage.data.Settings(context) }
+        private var lastAccessibilitySettings: CompanionAccessibilitySettings? = null
+        private val settingsGeneration = AtomicLong(0)
+        private var sentOmpGeneration: Long? = null
+        private var stopWatchingSettings: (() -> Unit)? = null
+
+        @Synchronized fun syncAccessibilitySettings(endpoint: IAgentCompanion) {
+            if (binding !== this || CompanionProtocol.CAP_ACCESSIBILITY_SETTINGS and capabilities.value == 0) return
+            val next = CompanionAccessibilitySettings.from(settings)
+            if (next != lastAccessibilitySettings && endpoint.updateAccessibilitySettings(next.toBundle())) {
+                lastAccessibilitySettings = next
+            }
+        }
+        @Synchronized fun syncOmpSettings(endpoint: IAgentCompanion) {
+            if (binding !== this || capabilities.value and CompanionProtocol.CAP_OMP == 0) return
+            val generation = settingsGeneration.get()
+            if (generation == sentOmpGeneration) return
+            if (sentOmpGeneration == null && !settings.ompEnabled && !settings.ompTermuxEnabled) return
+            val updated = runCatching {
+                endpoint.ompRequest(CompanionOmpClient.configRequest(CoreSettingsStore(settings))).getBoolean("ok")
+            }.getOrDefault(false)
+            if (updated) sentOmpGeneration = generation
+        }
+
         private val death = IBinder.DeathRecipient { lost(CompanionState.DISCONNECTED) }
         private val callback = object : IAgentCallback.Stub() {
             private fun trusted() = Binder.getCallingUid() == uid && binding === this@Binding
@@ -140,30 +179,46 @@ object CompanionConnection {
                         lost(CompanionState.INCOMPATIBLE)
                         return@launch
                     }
-                    publishMetadata(endpoint.metadata())
+                    protocolVersion = version
                     backend = RemoteAccessibilityBackend(endpoint) { lost(CompanionState.DISCONNECTED) }
-                    remote = endpoint
                     endpoint.subscribe(callback)
-                    publish(endpoint.status())
+                    synchronized(lock) {
+                        if (binding !== this@Binding) return@launch
+                        stopWatchingSettings = settings.observe { settingsGeneration.incrementAndGet() }
+                        remote = endpoint
+                    }
+                    publishMetadata(endpoint.metadata())
+                    refreshStatus(endpoint)
+                    syncAccessibilitySettings(endpoint)
+                    syncOmpSettings(endpoint)
                 } catch (_: SecurityException) { lost(CompanionState.PERMISSION_MISSING) }
                 catch (_: Exception) { lost(CompanionState.DISCONNECTED) }
             }
         }
 
         fun publishMetadata(reply: Bundle) {
-            val value = CompanionMetadata(
-                reply.getLong("versionCode"), reply.getInt("capabilities"), reply.getBoolean("updateAvailable"),
-            )
+            val advertised = reply.getInt("capabilities")
+            val capabilities = if (protocolVersion >= 3) advertised else advertised and
+                (CompanionProtocol.CAP_SCREEN or CompanionProtocol.CAP_SHELL or CompanionProtocol.CAP_PACKAGES)
+            val value = CompanionMetadata(reply.getLong("versionCode"), capabilities, reply.getBoolean("updateAvailable"))
             synchronized(lock) {
                 if (binding !== this) return
                 metadata = value
+                _capabilities.value = value.capabilities
                 _updateAvailable.value = value.updateAvailable
             }
         }
 
-        fun publish(status: Int) {
+        fun refreshStatus(endpoint: IAgentCompanion) {
+            val revision = synchronized(lock) { statusRevision }
+            publish(endpoint.status(), revision)
+        }
+
+        private fun publish(status: Int, expectedRevision: Long? = null) {
             synchronized(lock) {
                 if (binding !== this) return
+                if (expectedRevision != null && expectedRevision != statusRevision) return
+                statusRevision++
                 val next = when (status) {
                     CompanionProtocol.READY -> CompanionState.CONNECTED
                     CompanionProtocol.CONSENT_NEEDED -> CompanionState.CONSENT_NEEDED
@@ -192,7 +247,10 @@ object CompanionConnection {
             synchronized(lock) {
                 if (binding !== this) return
                 binding = null
+                stopWatchingSettings?.invoke()
+                stopWatchingSettings = null
                 metadata = null
+                _capabilities.value = 0
                 _updateAvailable.value = false
                 backend?.disconnect()
                 if (AgentAccessibility.instance === agent) AgentAccessibility.instance = null

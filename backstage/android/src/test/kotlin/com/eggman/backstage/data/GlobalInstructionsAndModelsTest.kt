@@ -36,25 +36,48 @@ class GlobalInstructionsAndModelsTest {
             assertFalse(store.list().any { it.name in setOf("dex-window-management", "web-research-with-default-browser") })
         } finally { dir.deleteRecursively() }
     }
-    @Test fun enabledModelsPersistPerProviderAndAlwaysIncludeMain() {
+    @Test fun removingActiveModelSelectsNextEnabledModel() {
         val storage = MemoryStore()
-        val s = Settings(storage)
-        for (p in Provider.entries) {
-            val defaults = p.recommended.map { it.id }.ifEmpty { listOf(p.defaultModel) }.filter(String::isNotBlank).toSet()
-            assertEquals(p.name, defaults + listOf(s.model(p)).filter(String::isNotBlank), s.enabledModels(p))
-        }
-        val p = Provider.OPENAI
-        s.setEnabledModels(p, setOf(" first ", "second", ""))
-        assertEquals(setOf("first", "second", p.defaultModel), Settings(storage).enabledModels(p))
-        assertNotNull(storage.getString("models_enabled_OPENAI"))
-        s.setModel(p, "second")
-        assertEquals("second", s.model(p))
-        s.setEnabledModels(p, emptySet()) // All off keeps chat's main.
-        assertEquals(setOf("second"), s.enabledModels(p))
-        assertTrue(s.modelOptions(p).containsAll(listOf("first", "second")))
-        s.setEnabledModels(p, setOf("first", "second", "third")) // All on.
-        s.setEnabledModels(p, s.enabledModels(p) - "third")
-        assertEquals(setOf("first", "second"), s.enabledModels(p))
-        assertEquals(Provider.ANTHROPIC.suggestedModels.toSet(), s.enabledModels(Provider.ANTHROPIC))
+        val settings = Settings(storage)
+        settings.setEnabledModels(Provider.OPENAI, setOf(" first ", "second", ""))
+        assertEquals("first", Settings(storage).model(Provider.OPENAI))
+        settings.setEnabledModels(Provider.OPENAI, setOf("second"))
+        assertEquals("second", Settings(storage).model(Provider.OPENAI))
+        assertEquals(setOf("second"), settings.enabledModels(Provider.OPENAI))
+        assertTrue(settings.modelOptions(Provider.OPENAI).contains("first"))
+        assertEquals(Provider.ANTHROPIC.suggestedModels.toSet(), settings.enabledModels(Provider.ANTHROPIC))
+    }
+
+    @Test fun clearingEnabledModelsPersistsAnUnconfiguredProvider() {
+        val storage = MemoryStore()
+        val settings = Settings(storage).apply { setApiKey(provider, "test-key") }
+        settings.setEnabledModels(settings.provider, emptySet())
+        val reloaded = Settings(storage)
+        assertEquals("", reloaded.model())
+        assertTrue(reloaded.enabledModels().isEmpty())
+        assertFalse(reloaded.providerConfigured())
+        val readiness = com.eggman.backstage.agent.ReadinessCheck.compute(
+            com.eggman.backstage.agent.ReadinessInputs(reloaded.providerConfig().problem(), true,
+                true, true, false, false, true, true, 35),
+        )
+        assertFalse(readiness.providerConfigured)
+        assertTrue(readiness.problems.single().contains("No model selected"))
+        reloaded.setEnabledModels(reloaded.provider, setOf("favorite"))
+        assertEquals("favorite", reloaded.model())
+        assertTrue(reloaded.providerConfigured())
+    }
+
+    @Test fun explicitModelSelectionEnablesItsModel() {
+        val settings = Settings(MemoryStore())
+        settings.setEnabledModels(settings.provider, emptySet())
+        settings.setModel(settings.provider, "manual")
+        assertEquals("manual", settings.model())
+        assertEquals(setOf("manual"), settings.enabledModels())
+    }
+
+    @Test fun savedMainRemainsEnabledWithLegacyPreferences() {
+        val settings = Settings(MemoryStore(mapOf("model_OPENAI" to "custom", "models_enabled_OPENAI" to "other")))
+        assertEquals("custom", settings.model(Provider.OPENAI))
+        assertEquals(setOf("custom", "other"), settings.enabledModels(Provider.OPENAI))
     }
 }

@@ -58,7 +58,7 @@ object Schedules {
                 desktopRunsWhileLocked = runCatching {
                     com.eggman.backstage.agent.LockedDesktop.worksWhileLocked(
                         AgentAccess.host(),
-                        autoStart = com.eggman.backstage.data.Settings(app).autoStartDesktop,
+                        autoStart = com.eggman.backstage.data.Settings(app).mayAutoStartDesktop,
                     )
                 }.getOrDefault(false),
                 target = task.target,

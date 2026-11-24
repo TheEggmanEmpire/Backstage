@@ -10,5 +10,4 @@
             <data android:scheme="smsto" />
         </intent>
     </queries>
-    <application android:usesCleartextTraffic="false" tools:replace="android:usesCleartextTraffic" />
 </manifest>

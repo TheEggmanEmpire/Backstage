@@ -32,6 +32,20 @@ class SettingsSearchTest {
         assertTrue(entries.all { it.title.isNotBlank() && it.description.isNotBlank() && it.keywords.isNotEmpty() })
     }
 
+    @Test fun companionSettingsRequireTheirOwnCapabilities() {
+        if (!PLAY_DISTRIBUTION) return
+        val titles = mapOf(
+            "ADB commands" to CompanionSetting.SHELL,
+            "Run skill scripts" to CompanionSetting.SKILL_SCRIPTS,
+            "Detector packages" to CompanionSetting.ACCESSIBILITY,
+            "Enable OMP harness" to CompanionSetting.OMP,
+        )
+        titles.forEach { (title, capability) ->
+            assertFalse(SettingsSearch.search(title).any { it.title == title })
+            assertTrue(SettingsSearch.search(title, companionSettings = setOf(capability)).any { it.title == title })
+        }
+    }
+
     @Test fun everyLiteralSettingControlInTheUiHasSearchMetadata() {
         // Scan real controls so adding a UI field without indexing it fails this test.
         val root = generateSequence(java.io.File(requireNotNull(System.getProperty("user.dir")))) { it.parentFile }
@@ -52,7 +66,7 @@ class SettingsSearchTest {
             (controls.findAll(source) + labels.findAll(source)).map { it.groupValues[1] }.toList()
         }.filterNot { it == "Search settings" }
         assertTrue(titles.size >= 40)
-        val missing = titles.filter { title -> SettingsSearch.entries.none {
+        val missing = titles.filter { title -> SettingsSearch.search("", companionSettings = CompanionSetting.entries.toSet()).none {
             title in it.title || title in it.description
         } }
         assertEquals("Every setting must be searchable", emptyList<String>(), missing)

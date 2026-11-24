@@ -24,13 +24,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import android.content.res.Configuration
 import android.view.Display
 import com.eggman.backstage.shell.ShellPage
 import com.eggman.backstage.shell.shellWideLayout
 import com.eggman.backstage.agent.api.Source
+import com.eggman.backstage.entry.AgentAccess
 import com.eggman.backstage.entry.EntryRouter
 import com.eggman.backstage.entry.EntryRouter.Screen
+import com.eggman.backstage.entry.SurfaceScope
 import com.eggman.backstage.notify.TaskNotifier
 import com.eggman.backstage.overlay.Overlay
 import com.eggman.backstage.ui.chat.ChatScreen
@@ -42,6 +45,7 @@ import com.eggman.backstage.ui.schedule.ScheduleScreen
 import com.eggman.backstage.ui.settings.SettingsScreen
 import com.eggman.backstage.ui.theme.BackstageTheme
 import com.eggman.backstage.voice.WakeWord
+import kotlinx.coroutines.launch
 
 /**
  * The Agent tab of Backstage (opened from Home's "Agent" destination, the backstage://agent deep link, ASSIST, the share
@@ -59,10 +63,8 @@ class AgentScreenActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        if (savedInstanceState == null) {
-            if (!vm.settings.onboardingDone) vm.screen.value = Screen.SETUP
-            route(intent)
-        }
+        if (!vm.settings.onboardingDone) vm.screen.value = Screen.SETUP
+        if (savedInstanceState == null) route(intent)
         // Android may kill the app while Install unknown apps Settings is in front. Restore its settings card
         // (Compose saves the destination and pending action), so returning can re-check approval and continue.
         if (savedInstanceState?.getBoolean("backstage_settings") == true) vm.screen.value = Screen.SETTINGS
@@ -87,7 +89,7 @@ class AgentScreenActivity : ComponentActivity() {
         WakeWord.refresh(this)
         Overlay.refresh(this)
         // Refresh the last task's readiness banner because the lock state may differ.
-        Thread { runCatching { com.eggman.backstage.entry.AgentAccess.controller()?.readiness() } }.start()
+        refreshReadiness()
     }
 
     override fun onPause() {
@@ -158,6 +160,12 @@ private fun AppRoot(vm: AgentViewModel, updateRequests: kotlinx.coroutines.flow.
         snack?.let { host.showSnackbar(it); vm.snackbar.value = null }
     }
     val activity = androidx.activity.compose.LocalActivity.current
+    if (activity != null && screen != Screen.SETUP && vm.settings.onboardingDone) {
+        LifecycleResumeEffect(activity) {
+            com.eggman.backstage.shell.ShellLifecycle.onMainScreenShown(activity)
+            onPauseOrDispose {}
+        }
+    }
     val sub = screen == Screen.SETUP || screen == Screen.LICENSES || screen == Screen.SKILLS
     BackHandler {
         if (screen == Screen.CHAT && activity != null) openHome(activity)
@@ -187,11 +195,22 @@ private fun AppRoot(vm: AgentViewModel, updateRequests: kotlinx.coroutines.flow.
                     Screen.SETTINGS -> SettingsScreen(vm.settings, openUpdatesRequest = updatesRequest, onOpenSetup = { vm.screen.value = Screen.SETUP },
                         onOpenAppSettings = { activity?.let { openHome(it, ShellPage.SETTINGS) } },
                         onOpenLicenses = { vm.screen.value = Screen.LICENSES }, onOpenSkills = { vm.screen.value = Screen.SKILLS }, modifier = m)
-                    Screen.SETUP -> SetupScreen(onOpenSettings = { vm.screen.value = Screen.SETTINGS }, onDone = { vm.screen.value = Screen.CHAT }, modifier = m)
+                    Screen.SETUP -> SetupScreen(
+                        onOpenSettings = { vm.screen.value = Screen.SETTINGS },
+                        onDone = {
+                            vm.screen.value = Screen.CHAT
+                            refreshReadiness()
+                        },
+                        modifier = m,
+                    )
                     Screen.LICENSES -> LicensesScreen(m)
                     Screen.SKILLS -> com.eggman.backstage.ui.settings.SkillsScreen(onBack = { vm.screen.value = Screen.SETTINGS }, modifier = m)
                 }
             }
         }
     }
+}
+
+private fun refreshReadiness() {
+    SurfaceScope.launch { runCatching { AgentAccess.controller()?.readiness() } }
 }

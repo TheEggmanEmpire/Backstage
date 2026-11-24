@@ -75,7 +75,7 @@ object DetectorPause {
 
     /** A window became frontmost ([AccessibilityBridge.onEvent]); cheap on the hot path. */
     fun onForeground(context: Context, pkg: String?) {
-        if (pkg == null || paused) return
+        if (com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION || pkg == null || paused) return
         val settings = settings(context) ?: return
         if (!settings.accessibilityConsent || !settings.detectorPause || pkg !in settings.detectorPackageSet()) return
         if (runningTask()) return

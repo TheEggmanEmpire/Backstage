@@ -13,6 +13,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 import com.eggman.backstage.a11y.LocalAccessibilityBackend
 import com.eggman.backstage.a11y.companion.*
 import com.eggman.backstage.companion.privilege.CompanionPrivilege
+import com.eggman.backstage.companion.omp.CompanionOmpRuntime
 import com.eggman.backstage.companion.update.CompanionUpdates
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,7 @@ class CompanionService : Service() {
         super.onCreate()
         CompanionRuntime.stateListeners += changed
         CompanionRuntime.eventListeners += event
+        CompanionRuntime.restoreAccessibilitySettings(applicationContext)
     }
     private fun caller() = CompanionSignatures.enforceCaller(this)
     private fun session(): Session = sessions[caller()] ?: throw SecurityException("Subscribe before requesting screen access")
@@ -56,10 +58,16 @@ class CompanionService : Service() {
             try {
                 val context = this@CompanionService
                 val screen = if (backend() != null) CompanionProtocol.CAP_SCREEN else 0
+                val accessibility = if (CompanionRuntime.consent(context) && CompanionPrivilege.canUseShell()) {
+                    CompanionProtocol.CAP_ACCESSIBILITY_SETTINGS
+                } else 0
                 return Bundle().apply {
                     putLong("versionCode", BuildConfig.VERSION_CODE.toLong())
                     putInt("protocolVersion", CompanionProtocol.VERSION)
-                    putInt("capabilities", screen or CompanionPrivilege.capabilities(context))
+                    putInt(
+                        "capabilities", screen or accessibility or CompanionPrivilege.capabilities(context) or
+                            CompanionOmpRuntime.capabilities(context),
+                    )
                     putBoolean("updateAvailable", CompanionUpdates.available(context))
                 }
             } finally {
@@ -70,7 +78,7 @@ class CompanionService : Service() {
             val owner = session()
             val identity = Binder.clearCallingIdentity()
             try {
-                if (!owner.active) throw SecurityException("Backstage Agent session closed")
+                if (!owner.active) throw SecurityException("Backstage-play-agent session closed")
                 val reply = CompanionPrivilege.request(this@CompanionService, owner, request)
                 if (!owner.active) CompanionPrivilege.cancelOwner(owner)
                 return reply
@@ -78,6 +86,31 @@ class CompanionService : Service() {
                 Binder.restoreCallingIdentity(identity)
             }
         }
+        override fun updateAccessibilitySettings(settings: Bundle): Boolean {
+            val owner = session()
+            val identity = Binder.clearCallingIdentity()
+            try {
+                if (!owner.active) throw SecurityException("Backstage-play-agent session closed")
+                val context = this@CompanionService
+                return CompanionRuntime.consent(context) && CompanionRuntime.applyAccessibilitySettings(context, settings)
+            } finally {
+                Binder.restoreCallingIdentity(identity)
+            }
+        }
+
+        override fun ompRequest(request: Bundle): Bundle {
+            val owner = session()
+            val identity = Binder.clearCallingIdentity()
+            try {
+                if (!owner.active) throw SecurityException("Backstage-play-agent session closed")
+                val reply = CompanionOmpRuntime.request(this@CompanionService, owner, request)
+                if (!owner.active) CompanionOmpRuntime.cancelOwner(owner)
+                return reply
+            } finally {
+                Binder.restoreCallingIdentity(identity)
+            }
+        }
+
         override fun status(): Int { caller(); return CompanionRuntime.status(this@CompanionService) }
         override fun subscribe(callback: IAgentCallback) {
             val uid = caller()
@@ -85,6 +118,7 @@ class CompanionService : Service() {
             sessions.put(uid, session)?.close()
             try {
                 callback.asBinder().linkToDeath(session.death, 0)
+                session.connected()
                 session.send { onStateChanged(CompanionRuntime.status(this@CompanionService)) }
             } catch (_: Exception) { remove(session) }
         }
@@ -138,7 +172,7 @@ class CompanionService : Service() {
                 val bitmap = local.screenshot(displayId) ?: error("Screenshot unavailable")
                 try {
                     if (!session.active || local !== backend()) error("Service disconnected")
-                    check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+                    check(bitmap.compress(Bitmap.CompressFormat.JPEG, CompanionProtocol.SCREENSHOT_JPEG_QUALITY, output))
                 } finally { bitmap.recycle() }
             }
         }
@@ -202,9 +236,14 @@ class CompanionService : Service() {
                 block(out)
             } } catch (_: Exception) { pipePermit.release(); null }
         }
-        fun close() {
+        @Synchronized fun connected() {
+            if (active) CompanionRuntime.clientConnected(this)
+        }
+        @Synchronized fun close() {
             active = false
+            CompanionRuntime.clientDisconnected(this)
             CompanionPrivilege.cancelOwner(this)
+            CompanionOmpRuntime.cancelOwner(this)
             handles.clear()
             runCatching { callback.asBinder().unlinkToDeath(death, 0) }
         }

@@ -63,7 +63,7 @@ object OmpConfig {
     }
     fun generate(entries: List<Entry>, current: Provider, model: String, remoteMcpServers: List<RemoteMcpServer> = emptyList()): Files {
         val models = buildString {
-            appendLine("providers:")
+            appendLine(if (entries.isEmpty()) "providers: {}" else "providers:")
             for ((_, providerEntries) in entries.groupBy { it.provider }) {
                 val e = providerEntries.first()
                 val id = providerId(e.provider)
@@ -110,10 +110,12 @@ object OmpConfig {
         val enabled = (listOf(main).filter { model.isNotBlank() } + entries.filter { it.model.isNotBlank() }
             .map { "${providerId(it.provider)}/${it.model}" }.sorted()).distinct()
         val config = buildString {
-            appendLine("modelRoles:")
-            appendLine("  default: ${yaml(main)}")
+            if (model.isNotBlank()) {
+                appendLine("modelRoles:")
+                appendLine("  default: ${yaml(main)}")
+            }
             for (key in listOf("enabledModels", "cycleOrder")) {
-                appendLine("$key:")
+                appendLine(if (enabled.isEmpty()) "$key: []" else "$key:")
                 enabled.forEach { appendLine("  - ${yaml(it)}") }
             }
             appendLine("startup:")

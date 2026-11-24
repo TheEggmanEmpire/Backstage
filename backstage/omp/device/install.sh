@@ -3,7 +3,7 @@
 set -eu
 umask 077
 ROOT=${1:?ROOT}; APK=${2:?APK}; LIBDIR=${3:?LIBDIR}
-case "$ROOT" in /data/local/tmp/backstage-omp) ;; *) echo 'Invalid runtime root' >&2; exit 2;; esac
+case "$ROOT" in /data/local/tmp/backstage-omp|/data/local/tmp/backstage-agent-omp) ;; *) echo 'Invalid runtime root' >&2; exit 2;; esac
 [ -f "$LIBDIR/libproot.so" ] && [ -f "$LIBDIR/libproot_loader.so" ] || { echo 'Dextop proot libraries unavailable' >&2; exit 1; }
 step() { printf 'step: %s\n' "$1"; }
 LOCK=$ROOT.install-lock

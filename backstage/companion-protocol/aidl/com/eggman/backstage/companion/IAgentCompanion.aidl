@@ -12,7 +12,7 @@ interface IAgentCompanion {
     String[] capabilityGaps();
     int[] trackedDisplays();
     List<AccessibilityWindowInfo> windowsOn(int displayId);
-    // Only file descriptors cross Binder. Trees and PNGs are bounded byte streams written on IO workers.
+    // Only file descriptors cross Binder. Trees and JPEG screenshots are bounded byte streams written on IO workers.
     @nullable ParcelFileDescriptor capture(int displayId, int width, int height);
     @nullable ParcelFileDescriptor screenshot(int displayId);
     boolean nodeAction(long handle, int action, int displayId, @nullable String text);
@@ -22,4 +22,6 @@ interface IAgentCompanion {
     // Keep transaction indices stable for the methods above.
     Bundle metadata();
     Bundle privilegedRequest(in Bundle request);
+    boolean updateAccessibilitySettings(in Bundle settings);
+    Bundle ompRequest(in Bundle request);
 }

@@ -21,13 +21,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.privileged.ShizukuState
 
 /**
- * Prominent disclosure for the app's ONE accessibility service ("Backstage": it runs the desktop and is the agent's eyes
- * and hands), shown in the app before Backstage switches it on or sends the user to Android's accessibility settings.
- * Consent is stored ([com.eggman.backstage.data.Settings.accessibilityConsent]) and can be withdrawn in Settings; without
- * it nothing switches the service on automatically.
+ * Disclosure for Backstage's accessibility service. On Play it covers desktop input and windows. On GitHub it
+ * also covers agent screen access. Consent is stored in [com.eggman.backstage.data.Settings.accessibilityConsent].
  */
 object AccessibilityDisclosure {
     const val TITLE = "Before Backstage uses Accessibility"
@@ -46,6 +45,14 @@ object AccessibilityDisclosure {
             "You can withdraw this consent at any time in Settings; switching the service off in Android settings is " +
             "respected as well (the desktop and the agent then stop working).",
     )
+
+    private val desktopPoints = listOf(
+        "The Backstage accessibility service manages the desktop window and sends keyboard and mouse input to the desktop.",
+        "Backstage-play-agent asks for its own permission to read and operate apps. The desktop service does not send screen content to your AI provider.",
+        "To turn off desktop accessibility, disable Backstage in Android Accessibility settings. The desktop needs this service to run.",
+    )
+
+    val points: List<String> get() = if (PLAY_DISTRIBUTION) desktopPoints else POINTS
 
     const val CHECKBOX = "I understand and agree"
     const val AGREE = "Agree and continue"
@@ -69,7 +76,7 @@ fun AccessibilityDisclosureDialog(onAgree: () -> Unit, onDecline: () -> Unit) {
         title = { Text(AccessibilityDisclosure.TITLE) },
         text = {
             Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                AccessibilityDisclosure.POINTS.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                AccessibilityDisclosure.points.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                 Row(
                     Modifier.toggleable(value = ticked, role = Role.Checkbox, onValueChange = { ticked = it }),
                     verticalAlignment = Alignment.CenterVertically,

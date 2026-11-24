@@ -4,7 +4,7 @@ ROOT=${1:?ROOT}; LIBDIR=${2:?LIBDIR}; shift 2
 [ "${1:-}" = -- ] || exit 2
 shift
 [ "$#" -gt 0 ] || exit 2
-case "$ROOT" in /data/local/tmp/backstage-omp) ;; *) exit 2;; esac
+case "$ROOT" in /data/local/tmp/backstage-omp|/data/local/tmp/backstage-agent-omp) ;; *) exit 2;; esac
 PREFIX=/data/data/com.termux/files/usr
 HOME=/data/data/com.termux/files/home
 export PREFIX HOME

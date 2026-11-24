@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Backstage <backstage@localhost>
+Date: Sun, 22 Nov 2026 17:15:00 +0900
+Subject: [PATCH] play-home-preview-start
+
+Start the desktop in the background before Home takes the live preview.
+
+---
+diff --git a/lib/backstage_shell.dart b/lib/backstage_shell.dart
+--- a/lib/backstage_shell.dart
++++ b/lib/backstage_shell.dart
+@@ -337,7 +337,11 @@
+       });
+     }
+     if (autoSwitched && presentation != 'in_app') autoSwitched = false;
+-    if (running) await syncPreview();
++    if (running) {
++      await syncPreview();
++    } else {
++      attempted = false;
++    }
+     if (!mounted || !visible) return;
+     if (running && (textureId == null || state['textureId'] == null)) {
+       final player = await BackstageShellBridge.invoke<Map<Object?, Object?>>(
+@@ -512,7 +516,7 @@
+                       key: const ValueKey('backstage-start-in-app'),
+                       onPressed: () => PlayDesktopStart.run(
+                         context,
+-                        () => PlayDesktopStart.startPlayer('in_app'),
++                        () => PlayDesktopStart.startPlayer('hidden'),
+                       ),
+                       child: const Text('Start'),
+                     ),
+diff --git a/test/backstage_shell_test.dart b/test/backstage_shell_test.dart
+--- a/test/backstage_shell_test.dart
++++ b/test/backstage_shell_test.dart
+@@ -75,6 +75,16 @@
+           return true;
+         case 'state':
+           return shellState;
++        case 'desktopStartPrerequisite':
++          return {'blocker': null};
++        case 'startPlayDesktop':
++          shellState.addAll({
++            'running': true,
++            'presentation': (call.arguments as Map)['presentation'],
++            'width': 1920,
++            'height': 1080,
++          });
++          return true;
+         case 'homeShown':
+           return null;
+         case 'playerAttach':
+@@ -124,6 +134,50 @@
+     );
+     await tester.pumpWidget(const SizedBox());
+   });
++
++  testWidgets('Play Start enters the Home preview through background', (
++    tester,
++  ) async {
++    tester.view.devicePixelRatio = 1;
++    tester.view.physicalSize = const Size(800, 1000);
++    addTearDown(tester.view.resetPhysicalSize);
++    addTearDown(tester.view.resetDevicePixelRatio);
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    final start = find.byKey(const ValueKey('backstage-start-in-app'));
++    await tester.tap(start);
++    await settle(tester);
++    expect(
++      shellCalls
++          .singleWhere((call) => call.method == 'startPlayDesktop')
++          .arguments,
++      {'presentation': 'hidden'},
++    );
++    await tester.pump(const Duration(seconds: 2));
++    await settle(tester);
++    expect(
++      shellCalls.where((call) => call.method == 'previewShow'),
++      hasLength(1),
++    );
++    expect(tester.widget<Texture>(find.byType(Texture)).textureId, 7);
++
++    await tester.tap(find.text('Background'));
++    await settle(tester);
++    expect(shellState['presentation'], 'hidden');
++    shellState.addAll({'running': false, 'presentation': 'none'});
++    await tester.pump(const Duration(seconds: 2));
++    await settle(tester);
++    await tester.tap(start);
++    await settle(tester);
++    await tester.pump(const Duration(seconds: 2));
++    await settle(tester);
++    expect(
++      shellCalls.where((call) => call.method == 'previewShow'),
++      hasLength(2),
++    );
++    expect(tester.widget<Texture>(find.byType(Texture)).textureId, 7);
++    await tester.pumpWidget(const SizedBox());
++  }, skip: !PlayDesktopStart.enabled);
+ 
+   testWidgets('Home reports visibility for desktop startup after setup', (
+     tester,

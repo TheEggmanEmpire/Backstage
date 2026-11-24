@@ -1,5 +1,40 @@
 <resources>
-    <string name="accessibility_description">After your consent, Backstage Agent reads screen content and notifications and performs taps, typing, gestures and navigation for tasks you request in Backstage. Data is shared only with the matching, same-signed Backstage app. That app can send task context to your configured AI provider. You can revoke access in this app or in Android Accessibility settings.</string>
-    <string name="companion_restricted_settings">If Android blocks accessibility, open Backstage Agent app info and select “Allow restricted settings” from the menu. Then return here and enable Backstage Agent.</string>
-    <string name="companion_open_app_info">Open Backstage Agent app info</string>
+    <string name="companion_app_name">Backstage-play-agent</string>
+    <string name="companion_screen_control">Screen control</string>
+    <string name="companion_screen_control_step">1. Grant screen control</string>
+    <string name="companion_screen_control_enabled">✓ Enabled</string>
+    <string name="companion_screen_control_disabled">Off</string>
+    <string name="companion_confirmation_needed">Open Backstage-play-agent to confirm</string>
+    <string name="accessibility_description">Screen and notification access for tasks you request in Backstage-play.</string>
+    <string name="companion_consent_message">Backstage-play-agent uses Accessibility to read screens, take screenshots, read notifications and perform taps, typing and gestures for tasks you request. It shares this data with the matching, same-signed Backstage-play app, which may send it to your AI provider for processing. Access continues while the service is enabled. Turn it off in Accessibility settings or revoke consent here.</string>
+    <string name="companion_consent_allow">Agree and continue</string>
+    <string name="companion_consent_decline">Cancel</string>
+    <string name="companion_revoke">Revoke screen control consent</string>
+    <string name="companion_accessibility_step_one">1. Open Accessibility and tap Backstage-play-agent once.</string>
+    <string name="companion_accessibility_step_two">2. Open app details, tap ⋮ and choose Allow restricted settings.</string>
+    <string name="companion_accessibility_step_three">3. Open Accessibility again and switch on Backstage-play-agent.</string>
+    <string name="companion_open_app_info">Open app details</string>
+    <string name="companion_connected">Connected to Backstage-play</string>
+    <string name="companion_disconnected">Disconnected from Backstage-play</string>
+    <string name="companion_more">More</string>
+    <string name="companion_less">Less</string>
+    <string name="companion_shizuku">2. Grant Shizuku</string>
+    <string name="companion_shizuku_grant">Grant Shizuku permission</string>
+    <string name="companion_shizuku_missing">Install Stellar or Shizuku Plus.</string>
+    <string name="companion_shizuku_stopped">Start Shizuku or enable Stellar compatibility.</string>
+    <string name="companion_shizuku_needed">Permission required</string>
+    <string name="companion_shizuku_granted">✓ Permission granted</string>
+    <string name="companion_shizuku_denied">Permission denied. Check the manager’s app permissions.</string>
+    <string name="companion_shizuku_failed">Could not request permission. Check the Shizuku connection.</string>
+    <string name="companion_shizuku_waiting">Waiting for the Shizuku connection…</string>
+    <string name="companion_open_shizuku_manager">Open Shizuku manager</string>
+    <string name="companion_approval_notifications">Enable approval notifications</string>
+    <string name="companion_approval_notifications_enabled">Approval notifications enabled.</string>
+    <string name="companion_approval_queue">Privileged requests</string>
+    <plurals name="companion_requests_waiting">
+        <item quantity="one">%d request waiting</item>
+        <item quantity="other">%d requests waiting</item>
+    </plurals>
+    <string name="companion_open_accessibility">Open Accessibility</string>
+    <string name="companion_back_to_backstage">Back to Backstage</string>
 </resources>

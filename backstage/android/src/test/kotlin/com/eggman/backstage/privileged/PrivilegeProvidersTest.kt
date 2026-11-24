@@ -18,6 +18,13 @@ class PrivilegeProvidersTest {
         assertNull(PrivilegeProviders.select(emptyList()))
     }
 
+    @Test fun shizukuPlusCanBeSelectedAsTheShizukuManager() {
+        val plus = "af.shizuku.plus.api"
+        assertTrue(plus in PrivilegeProviders.packages)
+        assertEquals(plus, PrivilegeProviders.choice(listOf(plus), PrivilegeProviders.SHIZUKU,
+            null, null, externalUsable = true, sessionRunning = false).selected)
+    }
+
     @Test fun explicitChoiceSurvivesAndRemovedChoiceFallsBack() {
         assertEquals(shizuku, PrivilegeProviders.select(listOf(stellar, shizuku), shizuku))
         assertEquals(shizuku, PrivilegeProviders.select(listOf(stellar, shizuku), "shizuku"))

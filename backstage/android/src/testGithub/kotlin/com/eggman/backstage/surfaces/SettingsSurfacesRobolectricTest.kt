@@ -1,6 +1,8 @@
 package com.eggman.backstage.surfaces
 
 import android.app.Application
+import android.content.Context
+import android.os.Binder
 import android.provider.Settings as AndroidSettings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
@@ -17,7 +19,16 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import com.eggman.backstage.agent.api.Target
 import com.eggman.backstage.data.InMemoryMemory
+import com.eggman.backstage.entry.AgentAccess
+import com.eggman.backstage.host.DesktopHost
+import com.eggman.backstage.host.DesktopHostExtras
+import com.eggman.backstage.host.DesktopHosts
+import com.eggman.backstage.testutil.FakeDesktopHost
+import com.eggman.backstage.ui.AgentViewModel
+import com.eggman.backstage.ui.chat.DesktopPane
+import com.eggman.backstage.ui.chat.DesktopPaneRules
 import com.eggman.backstage.exec.AppEntry
 import com.eggman.backstage.tools.HttpResult
 import com.eggman.backstage.ui.licenses.LicensesScreen
@@ -45,6 +56,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.util.ReflectionHelpers
+import rikka.shizuku.Shizuku
+import java.util.concurrent.atomic.AtomicReference
 import org.robolectric.annotation.Config
 
 /** Accessibility consent, module settings and offline license text as rendered Compose UI. */
@@ -95,7 +109,109 @@ class SettingsSurfacesRobolectricTest {
         assertTrue(agreed)
     }
 
+    @Test fun firstRunOpensTheWizardAndRequiresDesktopAccess() {
+        compose.setContent { SetupScreen(onOpenSettings = {}, onDone = {}) }
+        compose.onNodeWithText("Welcome to Backstage").assertExists()
+        compose.onNodeWithText("Next").performClick()
+        compose.onNodeWithText("Connect desktop access").assertExists()
+        compose.onNodeWithText("Next").assertIsNotEnabled()
+        compose.onNodeWithText("Get Stellar").assertExists()
+        compose.onNodeWithText("Get Shizuku Plus").assertExists()
+        compose.onNodeWithText("Continue anyway").assertDoesNotExist()
+        assertFalse(store.onboardingDone)
+    }
+
+    @Test fun firstRunFinishesAfterModelSelectionAndRecordsDesktopSetup() {
+        val resolver = app.contentResolver
+        val previousHost = DesktopHosts.current
+        val component = "${app.packageName}/moe.n4tsu.dextop.MirrorService"
+        val oldServices = AndroidSettings.Secure.getString(resolver, AndroidSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+        val oldEnabled = AndroidSettings.Secure.getString(resolver, AndroidSettings.Secure.ACCESSIBILITY_ENABLED)
+        val desktopPreferences = app.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        var finished = false
+        store.setBaseUrl(store.providerId, "http://localhost:1")
+        DesktopHosts.current = object : DesktopHost by FakeDesktopHost(), DesktopHostExtras {
+            override fun setMiniStatus(text: String?) = Unit
+            override fun setMiniShape(shape: String) = true
+            override fun miniShape() = DesktopHostExtras.SHAPE_ROUNDED
+            override fun usePrivilegeProvider(provider: String) = false
+            override fun desktopAccessibilityComponent() = component
+        }
+        ReflectionHelpers.setStaticField(Shizuku::class.java, "binder", Binder())
+        ReflectionHelpers.setStaticField(Shizuku::class.java, "permissionGranted", true)
+        try {
+            compose.setContent { SetupScreen(onOpenSettings = {}, onDone = { finished = true }) }
+            compose.onNodeWithText("Next").performClick()
+            compose.onNodeWithText("Next").assertIsEnabled().performClick()
+            compose.onNodeWithText("Allow desktop accessibility").assertExists()
+            compose.onNodeWithText("1. Open Accessibility and tap Backstage once.").assertExists()
+            compose.onNodeWithText("Open app details").assertExists()
+            compose.onAllNodesWithText("Open Accessibility")[1].assertExists()
+            compose.onNodeWithText("Set up automatically").performScrollTo().performClick()
+            compose.onNodeWithText(AccessibilityDisclosure.TITLE).assertExists()
+            compose.onNodeWithText(AccessibilityDisclosure.DECLINE).performClick()
+            compose.onNodeWithText("Next").assertIsNotEnabled()
+
+            compose.runOnIdle {
+                store.accessibilityConsent = true
+                AndroidSettings.Secure.putString(resolver, AndroidSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES, component)
+                AndroidSettings.Secure.putInt(resolver, AndroidSettings.Secure.ACCESSIBILITY_ENABLED, 1)
+            }
+            compose.onNodeWithText("Next").assertIsEnabled().performScrollTo().performClick()
+            compose.onNodeWithText("Connect an AI provider").assertExists()
+            compose.onNodeWithText("Next").assertIsNotEnabled()
+            compose.onNodeWithText("Sign in with ChatGPT (paid plan)").assertExists()
+            compose.onNodeWithText("Use your own API key (BYOK)").performClick()
+            compose.onNodeWithText("Base URL").assertExists()
+            compose.onNodeWithText("Main model / add model ID").assertExists()
+            compose.onNodeWithText("API key").performScrollTo().performTextInput("test-onboarding-key")
+            compose.onNodeWithText("Next").assertIsEnabled().performScrollTo().performClick()
+            compose.onNodeWithText("Choose your model").assertExists()
+            compose.onNodeWithText("Finish setup").assertIsNotEnabled()
+            assertFalse(store.onboardingDone)
+            compose.onNodeWithText("Custom model ID").performScrollTo().performTextInput("github-onboarding-model")
+            compose.onNodeWithText("Use").performScrollTo().performClick()
+            compose.onNodeWithText("Finish setup").assertIsEnabled().performScrollTo().performClick()
+            compose.onNodeWithText("Let the agent operate apps").assertDoesNotExist()
+            assertTrue(finished)
+            assertTrue(store.onboardingDone)
+            assertTrue(desktopPreferences.getBoolean("flutter.setup_completed", false))
+            assertEquals("github-onboarding-model", store.model())
+        } finally {
+            ReflectionHelpers.setStaticField(Shizuku::class.java, "binder", null)
+            ReflectionHelpers.setStaticField(Shizuku::class.java, "permissionGranted", false)
+            DesktopHosts.current = previousHost
+            AndroidSettings.Secure.putString(resolver, AndroidSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES, oldServices)
+            AndroidSettings.Secure.putString(resolver, AndroidSettings.Secure.ACCESSIBILITY_ENABLED, oldEnabled)
+            desktopPreferences.edit().remove("flutter.setup_completed").apply()
+        }
+    }
+
+    @Test fun agentDesktopStartRequestsBackgroundPresentation() {
+        val started = AtomicReference<DesktopHost.Presentation>()
+        val fake = FakeDesktopHost(active = false)
+        val host = object : DesktopHost by fake {
+            override suspend fun startDesktop(presentation: DesktopHost.Presentation, timeoutMs: Long): DesktopHost.Geometry? =
+                fake.startDesktop(presentation, timeoutMs).also { started.set(presentation) }
+        }
+        val previousHost = AgentAccess.hostOverride
+        AgentAccess.hostOverride = host
+        store.defaultTarget = Target.DESKTOP
+        try {
+            val vm = AgentViewModel(app)
+            compose.setContent { DesktopPane(vm) }
+            compose.onNodeWithText(DesktopPaneRules.START).performClick()
+            compose.waitUntil(5_000) { started.get() != null }
+            assertEquals(DesktopHost.Presentation.HIDDEN, started.get())
+            assertEquals(DesktopHost.Presentation.IN_APP,
+                DesktopPaneRules.autoShow(started.get(), onScreen = true, userMovedIt = false))
+        } finally {
+            AgentAccess.hostOverride = previousHost
+        }
+    }
+
     @Test fun enablingAccessibilityShowsTheDisclosureBeforeAnything() {
+        store.onboardingDone = true
         compose.setContent { SetupScreen(onOpenSettings = {}, onDone = {}) }
         compose.onNodeWithText("Enable").performScrollTo().performClick()
         compose.waitForIdle()

@@ -30,6 +30,10 @@ object PresentationNames {
     }
 }
 
+/** A live preview can take a background session before the starter observes its presentation. */
+fun desktopStartPresentationReached(wanted: DesktopHost.Presentation, current: DesktopHost.Presentation): Boolean =
+    wanted == current || (wanted == DesktopHost.Presentation.HIDDEN && current == DesktopHost.Presentation.IN_APP)
+
 /** Decoding of shell fallbacks (screencap piped through base64, since the privileged shell returns text). */
 object ShellPayloads {
     private val PNG_MAGIC = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)

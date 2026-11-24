@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Backstage <backstage@localhost>
+Date: Sun, 22 Nov 2026 17:15:00 +0900
+Subject: [PATCH] shizuku-plus-desktop-discovery
+
+Use the shared Shizuku package list for desktop discovery and diagnostics.
+
+---
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
+@@ -980,8 +980,7 @@
+                 packageName != this.packageName && (
+                     packageName == STELLAR_PACKAGE ||
+                         packageName == SHEVERY_PACKAGE ||
+-                        packageName == "moe.shizuku.privileged.api" ||
+-                        packageName == "moe.shizuku.manager" ||
++                        packageName in com.eggman.backstage.privileged.PrivilegeProviders.shizukuPackages ||
+                         info.permissions?.any { it.name == SHIZUKU_PERMISSION } == true
+                     )
+             }
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/DeviceDiagnostics.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/DeviceDiagnostics.kt
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/DeviceDiagnostics.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/DeviceDiagnostics.kt
+@@ -22,11 +22,10 @@
+         val stellarInstalled = runCatching {
+             context.packageManager.getPackageInfo("roro.stellar.manager", 0)
+         }.isSuccess
+-        val originalShizukuInstalled = runCatching {
+-            context.packageManager.getPackageInfo("moe.shizuku.privileged.api", 0)
+-        }.isSuccess || runCatching {
+-            context.packageManager.getPackageInfo("moe.shizuku.manager", 0)
+-        }.isSuccess
++        val shizukuPackages = com.eggman.backstage.privileged.PrivilegeProviders.shizukuPackages
++        val shizukuManagerInstalled = shizukuPackages.any { packageName ->
++            runCatching { context.packageManager.getPackageInfo(packageName, 0) }.isSuccess
++        }
+         @Suppress("DEPRECATION")
+         val compatibleProviders = runCatching {
+             context.packageManager.getInstalledPackages(PackageManager.GET_PERMISSIONS)
+@@ -34,8 +33,7 @@
+                     info.packageName != context.packageName && (
+                         info.packageName == "roro.stellar.manager" ||
+                             info.packageName == "com.hamondev.shevery" ||
+-                            info.packageName == "moe.shizuku.privileged.api" ||
+-                            info.packageName == "moe.shizuku.manager" ||
++                            info.packageName in shizukuPackages ||
+                             info.permissions?.any {
+                                 it.name == "moe.shizuku.manager.permission.API_V23"
+                             } == true
+@@ -123,7 +121,7 @@
+                 }.orEmpty().ifBlank { "Shizuku" }
+             },
+             "stellarInstalled" to stellarInstalled,
+-            "originalShizukuInstalled" to originalShizukuInstalled,
++            "shizukuManagerInstalled" to shizukuManagerInstalled,
+             "compatiblePrivilegeProviders" to compatibleProviders.map { it.packageName },
+             "secureSettings" to secureSettings,
+             "accessibility" to accessibilityCapable,

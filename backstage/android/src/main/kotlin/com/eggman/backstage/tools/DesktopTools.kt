@@ -452,7 +452,8 @@ class DesktopStopTool : Tool {
 class DesktopRestartTool : Tool {
     override val name = "desktop_restart"
     override val description = "Restart the DeX desktop (stop it, start it again in the same presentation) for a clean " +
-        "screen: all its windows close. Use when the desktop is cluttered, stuck or misbehaving, or the user asks. " +
+        "screen: all its windows close. Use when the desktop is cluttered, stuck or misbehaving, when its screenshot is " +
+        "black or blank while it reports running (call it at once; waking or relaunching apps does not fix that), or the user asks. " +
         "Starts it when it is not running. Unsaved work in desktop apps is lost."
     override val schema = Schema.obj()
     override val targets = DESKTOP

@@ -157,17 +157,36 @@ class ChatGptAuth(
     }
 
     /** Null while the user has not approved yet; tokens once they have. */
-    suspend fun pollDeviceCode(device: ChatGptDeviceCode): ChatGptTokens? {
+    suspend fun pollDeviceCode(device: ChatGptDeviceCode): ChatGptTokens? = pollDeviceCode(device, awaitRetry = null)
+
+    internal suspend fun pollDeviceCode(
+        device: ChatGptDeviceCode,
+        awaitRetry: (suspend (LlmException) -> Unit)?,
+    ): ChatGptTokens? {
         val body = JSONObject().put("device_auth_id", device.deviceAuthId).put("user_code", device.userCode)
         val req = Request.Builder().url("$issuer/api/accounts/deviceauth/token").post(body.toString().toRequestBody(JSON)).build()
-        val resp = LlmHttp.execute(http, req, MAX_AUTH_RESPONSE)
+        val resp = withNetworkRecovery(awaitRetry) { LlmHttp.execute(http, req, MAX_AUTH_RESPONSE) }
         if (resp.code == 403 || resp.code == 404) return null
         if (resp.code !in 200..299) throw authError(resp.code, resp.body, "Waiting for the code approval")
         val j = runCatching { JSONObject(resp.body) }.getOrElse { throw LlmException(LlmErrorKind.INVALID_RESPONSE, "Unreadable sign-in reply") }
         val authCode = j.optString("authorization_code")
         val verifier = j.optString("code_verifier")
         if (authCode.isBlank() || verifier.isBlank()) throw LlmException(LlmErrorKind.INVALID_RESPONSE, "Incomplete sign-in reply")
-        return exchangeCode(authCode, verifier, "$issuer/deviceauth/callback")
+        return withNetworkRecovery(awaitRetry) { exchangeCode(authCode, verifier, "$issuer/deviceauth/callback") }
+    }
+
+    private suspend fun <T> withNetworkRecovery(
+        awaitRetry: (suspend (LlmException) -> Unit)?,
+        request: suspend () -> T,
+    ): T {
+        while (true) {
+            try {
+                return request()
+            } catch (e: LlmException) {
+                if (awaitRetry == null || (e.kind != LlmErrorKind.NETWORK && e.kind != LlmErrorKind.TIMEOUT)) throw e
+                awaitRetry(e)
+            }
+        }
     }
 
     private suspend fun call(request: Request, what: String, deviceHint: Boolean = false): JSONObject {
@@ -178,7 +197,7 @@ class ChatGptAuth(
 
     private fun authError(code: Int, body: String, what: String, deviceHint: Boolean = false): LlmException {
         val msg = LlmHttp.errorMessage(body)
-        val hint = if (deviceHint && (code == 403 || code == 404)) " Allow device code sign-in in ChatGPT → Settings → Security, or use the browser." else ""
+        val hint = if (deviceHint && (code == 403 || code == 404)) " Allow device code sign-in in ChatGPT → Settings → Security." else ""
         val kind = if (code == 400 || code == 401 || code == 403) LlmErrorKind.AUTH else LlmHttp.mapHttpError(code, body).kind
         return LlmException(kind, "$what failed (HTTP $code: $msg).$hint", code)
     }

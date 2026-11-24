@@ -11,15 +11,17 @@ object PrivilegeProviders {
     const val STELLAR = "stellar"
     const val SHIZUKU = "shizuku"
     const val STELLAR_PACKAGE = "roro.stellar.manager"
+    const val SHIZUKU_PLUS_PACKAGE = "af.shizuku.plus.api"
     const val STELLAR_DOWNLOAD = "https://github.com/roro2239/Stellar/releases"
+    const val SHIZUKU_PLUS_DOWNLOAD = "https://github.com/thejaustin/ShizukuPlus/releases"
     const val STELLAR_REQUEST_BINDER = "roro.stellar.intent.action.REQUEST_BINDER"
-    val shizukuPackages = listOf("moe.shizuku.privileged.api", "moe.shizuku.manager")
+    val shizukuPackages = listOf(SHIZUKU_PLUS_PACKAGE, "moe.shizuku.privileged.api", "moe.shizuku.manager")
     val packages = listOf(STELLAR_PACKAGE) + shizukuPackages
 
     /** Keep an explicit choice (package or upstream's legacy kind); defaults prefer Stellar. */
     fun select(installed: List<String>, saved: String? = null): String? {
         val ordered = installed.distinct().sortedWith(compareBy<String> {
-            when (it) { STELLAR_PACKAGE -> 0; in shizukuPackages -> 1 + shizukuPackages.indexOf(it); else -> 3 }
+            when (it) { STELLAR_PACKAGE -> 0; in shizukuPackages -> 1 + shizukuPackages.indexOf(it); else -> packages.size }
         }.thenBy { it })
         return ordered.firstOrNull { it == saved }
             ?: ordered.firstOrNull { saved == STELLAR && it == STELLAR_PACKAGE }

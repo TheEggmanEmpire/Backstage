@@ -21,11 +21,11 @@ data class ProviderConfig(
     val chatGpt: ChatGptSession? = null,
 ) {
     /** Null when usable, else a remediation text. */
-    fun problem(): String? = when {
+    fun problem(requireModel: Boolean = true): String? = when {
         provider == ProviderId.CHATGPT && (chatGpt == null || apiKey.isBlank()) -> "Not signed in to ChatGPT (Settings → AI provider → Sign in with ChatGPT)."
         provider.requiresKey && apiKey.isBlank() -> "No API key set for ${provider.label} (Settings → AI provider)."
         provider == ProviderId.CUSTOM && baseUrl.isBlank() -> "Enter the chat-completions URL of your OpenAI-compatible endpoint."
-        model.isBlank() -> "No model selected for ${provider.label}."
+        requireModel && model.isBlank() -> "No model selected for ${provider.label}."
         !baseUrl.startsWith("http://") && !baseUrl.startsWith("https://") -> "Invalid base URL for ${provider.label}: '$baseUrl'."
         else -> null
     }

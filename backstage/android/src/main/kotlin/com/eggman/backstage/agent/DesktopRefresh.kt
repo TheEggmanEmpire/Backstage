@@ -8,7 +8,7 @@ import kotlinx.coroutines.delay
 
 /**
  * Restarting the desktop gives a task a clean screen: no windows, dialogs or half-typed text left by earlier work.
- * Used by the desktop_restart tool and before every automation run (owner request ).
+ * Used by the desktop_restart tool, before every automation run, and before a task whose desktop shows only black.
  */
 object DesktopRefresh {
     /** Automations: everything that starts without a person typing into Backstage's chat. */

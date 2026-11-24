@@ -87,6 +87,15 @@ class ChatGptTest {
         assertTrue(exchange.contains("code=ac") && exchange.contains("code_verifier=cv") && exchange.contains("deviceauth%2Fcallback"))
     }
 
+    @Test fun deviceCodeRejectionExplainsHowToEnableCodeSignIn() = runBlocking {
+        for (status in listOf(403, 404)) {
+            server.enqueue(MockResponse().setResponseCode(status))
+            val error = runCatching { ChatGptAuth(issuer = issuer()).startDeviceCode() }.exceptionOrNull() as LlmException
+            assertTrue(error.message.orEmpty().contains("Allow device code sign-in in ChatGPT → Settings → Security"))
+            assertFalse(error.message.orEmpty().contains("or use the browser"))
+        }
+    }
+
     @Test fun sessionRefreshesNearExpiryAndKeepsRefreshToken() = runBlocking {
         val store = object : ChatGptTokenStore {
             var t: ChatGptTokens? = ChatGptTokens(idToken, "old", "r1", "acc-1", expiresAtMs = 1_000)

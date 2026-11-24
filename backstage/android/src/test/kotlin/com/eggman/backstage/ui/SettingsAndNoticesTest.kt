@@ -28,7 +28,7 @@ class SettingsAndNoticesTest {
     // ---- accessibility consent ----------------------------------------------------------
     @Test fun nothingAutoEnablesAccessibilityWithoutConsent() {
         val s = Settings(MemoryStore())
-        assertTrue("auto-enable stays the default preference", s.autoEnableAccessibility)
+        assertEquals(!PLAY_DISTRIBUTION, s.autoEnableAccessibility)
         assertFalse("consent is not presumed", s.accessibilityConsent)
         assertFalse(s.mayAutoEnableAccessibility)
         s.accessibilityConsent = true
@@ -121,7 +121,10 @@ class SettingsAndNoticesTest {
         assertNotNull(ModuleSettingsLogic.urlProblem("https://"))
         assertNull(ModuleSettingsLogic.urlProblem("https://mcp.example.org/mcp"))
         assertNotNull(ModuleSettingsLogic.insecureWarning("http://mcp.example.org/mcp"))
-        assertNull(ModuleSettingsLogic.insecureWarning("http://192.168.1.5:8000/mcp"))
+        assertEquals(
+            if (PLAY_DISTRIBUTION) "Unencrypted connection: keys and content travel in plain text." else null,
+            ModuleSettingsLogic.insecureWarning("http://192.168.1.5:8000/mcp"),
+        )
         assertNull(ModuleSettingsLogic.insecureWarning("https://mcp.example.org"))
         val added = ModuleSettingsLogic.upsertServer(emptyList(), RemoteMcpServer("", " ", " https://mcp.example.org/mcp ", " t "))
         val s = added.single()

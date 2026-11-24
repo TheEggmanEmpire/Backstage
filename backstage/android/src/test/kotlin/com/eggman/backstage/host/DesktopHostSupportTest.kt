@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.eggman.backstage.host.DesktopHost.Presentation
 
 class DesktopHostSupportTest {
 
@@ -21,6 +22,14 @@ class DesktopHostSupportTest {
         assertEquals(DesktopHost.Presentation.MINI, PresentationNames.parse(" MINI "))
         assertEquals(DesktopHost.Presentation.NONE, PresentationNames.parse(null))
         assertEquals(DesktopHost.Presentation.NONE, PresentationNames.parse("pip"))
+    }
+
+    @Test
+    fun backgroundStartCompletesWhenAPreviewAlreadyTookTheDesktop() {
+        assertTrue(desktopStartPresentationReached(Presentation.HIDDEN, Presentation.HIDDEN))
+        assertTrue(desktopStartPresentationReached(Presentation.HIDDEN, Presentation.IN_APP))
+        assertFalse(desktopStartPresentationReached(Presentation.HIDDEN, Presentation.FULL))
+        assertFalse(desktopStartPresentationReached(Presentation.MINI, Presentation.IN_APP))
     }
 
     @Test

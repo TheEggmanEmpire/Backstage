@@ -182,14 +182,16 @@ class ExportedReceiversRobolectricTest {
         assertEquals(Source.BROADCAST, r.source)
         assertEquals(Target.PHONE, r.target)
         assertFalse(r.interactive)
-        val started = shadowOf(app).broadcastIntents.single { it.action == BroadcastApi.ACTION_STARTED }
+        var broadcasts = emptyList<Intent>()
+        assertTrue(RoboSupport.waitFor {
+            broadcasts = runCatching { shadowOf(app).broadcastIntents.toList() }.getOrDefault(emptyList())
+            broadcasts.any { it.action == BroadcastApi.ACTION_RESULT }
+        })
+        val started = broadcasts.single { it.action == BroadcastApi.ACTION_STARTED }
         assertEquals("com.arlosoft.macrodroid", started.`package`)
         assertEquals("task1", started.getStringExtra(BroadcastApi.EXTRA_TASK_ID))
         assertEquals("req-9", started.getStringExtra(BroadcastApi.EXTRA_REQUEST_ID))
-        // The result is sent from a background thread: read the list only through a copy, which can race the append.
-        fun results() = runCatching { shadowOf(app).broadcastIntents.toList() }.getOrDefault(emptyList()).filter { it.action == BroadcastApi.ACTION_RESULT }
-        assertTrue(RoboSupport.waitFor { results().isNotEmpty() })
-        val result = results().single()
+        val result = broadcasts.single { it.action == BroadcastApi.ACTION_RESULT }
         assertEquals("com.arlosoft.macrodroid", result.`package`)
         assertEquals(TaskStatus.SUCCEEDED.name, result.getStringExtra(BroadcastApi.EXTRA_STATUS))
         assertEquals("done", result.getStringExtra(BroadcastApi.EXTRA_RESULT))

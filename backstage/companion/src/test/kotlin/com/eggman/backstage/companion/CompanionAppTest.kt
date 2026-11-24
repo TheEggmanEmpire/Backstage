@@ -1,10 +1,15 @@
 package com.eggman.backstage.companion
 
 import android.app.Application
+import android.content.ComponentName
 import android.os.Bundle
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.Settings
+import android.view.View
+import androidx.appcompat.app.AlertDialog
 import com.eggman.backstage.a11y.companion.CompanionProtocol
+import android.widget.TextView
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Test
@@ -12,6 +17,8 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowDialog
 
 @RunWith(RobolectricTestRunner::class)
 class CompanionAppTest {
@@ -26,12 +33,13 @@ class CompanionAppTest {
             assertNull(CompanionRuntime.backend)
             assertEquals(CompanionProtocol.CONSENT_NEEDED, CompanionRuntime.status(app))
             CompanionRuntime.setConsent(app, true)
-            CompanionRuntime.connected(service.get())
             assertNotNull(CompanionRuntime.backend)
             assertEquals(CompanionProtocol.READY, CompanionRuntime.status(app))
             CompanionRuntime.setConsent(app, false)
             assertNull(CompanionRuntime.backend)
             assertEquals(CompanionProtocol.CONSENT_NEEDED, CompanionRuntime.status(app))
+            CompanionRuntime.setConsent(app, true)
+            assertEquals(CompanionProtocol.READY, CompanionRuntime.status(app))
         } finally { service.destroy() }
     }
 
@@ -68,5 +76,66 @@ class CompanionAppTest {
         assertEquals("android.permission.BIND_ACCESSIBILITY_SERVICE", services.getValue(CompanionProtocol.ACCESSIBILITY_SERVICE).permission)
         val permission = app.packageManager.getPermissionInfo(CompanionProtocol.PERMISSION, 0)
         assertEquals(android.content.pm.PermissionInfo.PROTECTION_SIGNATURE, permission.protection)
+    }
+
+    @Test fun shizukuCanDeliverItsBinderToTheCompanion() {
+        val provider = app.packageManager.resolveContentProvider(app.packageName + ".shizuku", 0)
+        assertNotNull(provider)
+        assertEquals("rikka.shizuku.ShizukuProvider", provider!!.name)
+        assertEquals("android.permission.INTERACT_ACROSS_USERS_FULL", provider.writePermission)
+        assertTrue(provider.exported)
+    }
+
+    @Test fun screenControlShowsConsentBeforeOpeningAccessibilitySettings() {
+        Robolectric.buildActivity(CompanionActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            assertEquals(View.GONE, activity.findViewById<View>(R.id.companion_more).visibility)
+            activity.findViewById<View>(R.id.companion_open_accessibility).performClick()
+            assertNull(shadowOf(activity).nextStartedActivity)
+            val dialog = ShadowDialog.getLatestDialog() as AlertDialog
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            shadowOf(android.os.Looper.getMainLooper()).idle()
+            assertTrue(CompanionRuntime.consent(activity))
+            assertEquals(Settings.ACTION_ACCESSIBILITY_SETTINGS, shadowOf(activity).nextStartedActivity.action)
+            activity.findViewById<View>(R.id.companion_open_accessibility_again).performClick()
+            assertEquals(Settings.ACTION_ACCESSIBILITY_SETTINGS, shadowOf(activity).nextStartedActivity.action)
+        }
+    }
+
+    @Test fun acceptingConsentUsesTheServiceAlreadyEnabledInSettings() {
+        val component = ComponentName(app, AgentAccessibilityService::class.java).flattenToString()
+        Settings.Secure.putString(app.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, component)
+        val service = Robolectric.buildService(AgentAccessibilityService::class.java).create()
+        try {
+            CompanionRuntime.connected(service.get())
+            Robolectric.buildActivity(CompanionActivity::class.java).setup().use { controller ->
+                val activity = controller.get()
+                val status = activity.findViewById<TextView>(R.id.companion_screen_control_status)
+                assertEquals(activity.getString(R.string.companion_confirmation_needed), status.text)
+                activity.findViewById<View>(R.id.companion_open_accessibility).performClick()
+                val dialog = ShadowDialog.getLatestDialog() as AlertDialog
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                shadowOf(android.os.Looper.getMainLooper()).idle()
+                assertEquals(component, Settings.Secure.getString(app.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES))
+                assertEquals(activity.getString(R.string.companion_screen_control_enabled), status.text)
+                assertEquals(CompanionProtocol.READY, CompanionRuntime.status(app))
+                assertNull(shadowOf(activity).nextStartedActivity)
+            }
+        } finally {
+            service.destroy()
+            Settings.Secure.putString(app.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, "")
+        }
+    }
+
+    @Test fun appDetailsAreAvailableBesideScreenControl() {
+        Robolectric.buildActivity(CompanionActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val button = activity.findViewById<View>(R.id.companion_app_details)
+            assertTrue(button.isShown)
+            button.performClick()
+            val intent = shadowOf(activity).nextStartedActivity
+            assertEquals(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, intent.action)
+            assertEquals("package:${activity.packageName}", intent.dataString)
+        }
     }
 }

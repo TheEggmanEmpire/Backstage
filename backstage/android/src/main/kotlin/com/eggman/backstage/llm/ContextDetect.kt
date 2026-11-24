@@ -23,6 +23,10 @@ object ContextDetect {
     /** Same endpoint/cache as capability detection, also exposed to Settings' multi-model picker. */
     suspend fun fetchModels(settings: Settings, provider: Provider = settings.provider, force: Boolean = false): ModelListResult = withContext(Dispatchers.IO) {
         try {
+            if (provider == com.eggman.backstage.data.Provider.CHATGPT) {
+                val listed = settings.chatGptTokens?.let { ChatGptModels.fetch(settings.baseUrl(provider), it) }
+                return@withContext ModelListResult.Loaded(listed ?: provider.recommended)
+            }
             val result = catalog.fetch(settings.providerConfig(provider), force)
             if (result is ModelListResult.Loaded) for (info in result.models + result.hidden) {
                 info.context?.takeIf { it > 0 }?.let { settings.setDetectedContext(provider, info.id, it) }

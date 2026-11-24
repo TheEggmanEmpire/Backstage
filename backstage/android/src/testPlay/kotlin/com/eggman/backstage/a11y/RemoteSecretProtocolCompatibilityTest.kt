@@ -90,6 +90,8 @@ class RemoteSecretProtocolCompatibilityTest {
         val versionUnavailable: Boolean = false,
         val acceptSecret: Boolean = false,
     ) : IAgentCompanion.Stub() {
+        override fun updateAccessibilitySettings(settings: android.os.Bundle) = false
+        override fun ompRequest(request: android.os.Bundle) = android.os.Bundle()
         override fun metadata() = android.os.Bundle()
         override fun privilegedRequest(request: android.os.Bundle) = android.os.Bundle()
         val actions = mutableListOf<Int>()

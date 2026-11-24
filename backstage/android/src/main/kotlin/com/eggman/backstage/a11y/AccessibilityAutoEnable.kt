@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.host.DesktopHost
 import com.eggman.backstage.privileged.Privileged
 import kotlinx.coroutines.CoroutineScope
@@ -90,6 +91,7 @@ object AccessibilityAutoEnable {
 
     suspend fun ensure(context: Context): AccessibilityEnabler.Outcome {
         val component = component(context) ?: return AccessibilityEnabler.Outcome.Failed(AccessibilityEnabler.NO_HOST)
+        if (PLAY_DISTRIBUTION) return AccessibilityEnabler.Outcome.Failed("Enable desktop accessibility in Android Settings.")
         if (connected() && enabledInSettings(context)) return AccessibilityEnabler.Outcome.AlreadyEnabled
         if (userOptedOut(context)) {
             return AccessibilityEnabler.Outcome.Failed(
@@ -111,6 +113,7 @@ object AccessibilityAutoEnable {
     /** Waits (bounded) until the service is connected after enabling. */
     suspend fun ensureConnected(context: Context, timeoutMs: Long = 4_000): Boolean {
         if (connected()) return true
+        if (PLAY_DISTRIBUTION) return false
         // A task needs the service: it takes precedence over a running detector pause.
         if (DetectorPause.paused) DetectorPause.release(context)
         ensure(context)
@@ -124,6 +127,7 @@ object AccessibilityAutoEnable {
 
     /** Re-assert shortly after Dextop's own remove/re-add cycle (≈180 ms) completes. */
     fun reassertSoon(context: Context, delayMs: Long = 900) {
+        if (PLAY_DISTRIBUTION) return
         pending?.cancel()
         pending = scope.launch {
             delay(delayMs)

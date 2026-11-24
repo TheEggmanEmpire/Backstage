@@ -50,7 +50,10 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <package android:name="af.shizuku.plus.api" />
         <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="moe.shizuku.manager" />
+        <package android:name="roro.stellar.manager" />
     </queries>
 
     <!-- User-interface permissions. -->

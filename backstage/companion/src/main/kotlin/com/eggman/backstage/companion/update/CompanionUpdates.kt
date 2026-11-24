@@ -29,7 +29,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Self-update for Backstage Agent from this repository's GitHub releases. Network access happens only when the user
+ * Self-update for Backstage-play-agent from this repository's GitHub releases. Network access happens only when the user
  * taps Check or Download in the update section; [available] answers from the last stored check and never connects.
  */
 object CompanionUpdates {

@@ -7,6 +7,7 @@ internal object DistributionAccessibility {
     val hostAvailable: Boolean get() = AccessibilityBridge.hostComponent() != null
     val screenAvailable: Boolean get() = true
     val companionCapabilities: Int get() = 0
+    val companionOmp: Boolean get() = false
     fun gaps(): List<String> = AccessibilityBridge.currentGaps()
     fun connect(context: Context) = Unit
 }

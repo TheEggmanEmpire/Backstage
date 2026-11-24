@@ -46,13 +46,37 @@ import com.eggman.backstage.privileged.ShizukuSetup
 import com.eggman.backstage.privileged.ShizukuState
 import androidx.compose.runtime.LaunchedEffect
 import com.eggman.backstage.ui.settings.SettingsStores
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Onboarding / permission checklist, re-evaluated every time the screen resumes. */
 @Composable
 fun SetupScreen(onOpenSettings: () -> Unit, onDone: () -> Unit, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val store = remember(context) { SettingsStores.get(context) }
+    if (store.onboardingDone) {
+        SetupChecklist(onOpenSettings, onDone, modifier)
+    } else {
+        OnboardingWizard(onDone, modifier, automaticAccessibility = {
+            val report = try {
+                withContext(Dispatchers.IO) { PrivilegedSetup.applyAll(context) }
+            } catch (canceled: CancellationException) {
+                throw canceled
+            } catch (_: Exception) {
+                null
+            }
+            if (report?.accessibilityDone == true) {
+                runCatching { com.eggman.backstage.init.Backstage.environment.settings.privilegedSetupDone = true }
+            }
+            report?.summary() ?: "Start Stellar or Shizuku Plus and allow Backstage, then try again."
+        })
+    }
+}
+
+/** Permission checklist, re-evaluated every time the screen resumes. */
+@Composable
+private fun SetupChecklist(onOpenSettings: () -> Unit, onDone: () -> Unit, modifier: Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tick by remember { mutableIntStateOf(0) }
@@ -93,7 +117,7 @@ fun SetupScreen(onOpenSettings: () -> Unit, onDone: () -> Unit, modifier: Modifi
         settingUp = true
         scope.launch {
             val report = withContext(Dispatchers.IO) { PrivilegedSetup.applyAll(context) }
-            message = report?.summary() ?: "No privileged access yet: start Stellar (with Shizuku compatibility), Shizuku or Dextop's wireless debugging first."
+            message = report?.summary() ?: "No privileged access yet: start Stellar (with Shizuku compatibility) or Shizuku Plus first."
             if (report?.accessibilityDone == true) runCatching { com.eggman.backstage.init.Backstage.environment.settings.privilegedSetupDone = true }
             settingUp = false
             tick++
@@ -143,9 +167,9 @@ fun SetupScreen(onOpenSettings: () -> Unit, onDone: () -> Unit, modifier: Modifi
         Text("Set up Backstage", style = MaterialTheme.typography.titleLarge)
         Text("Backstage works on the Dextop desktop in the background (or on your phone screen). Grant what you need; everything optional can be added later.",
             style = MaterialTheme.typography.bodyMedium)
-        Text("Privilege provider: Stellar first, Shizuku next, then Dextop's built-in wireless debugging. " +
+        Text("Privilege provider: install Stellar or Shizuku Plus. " +
             "For Stellar, enable its Shizuku compatibility layer and allow Backstage.", style = MaterialTheme.typography.bodySmall)
-        TextButton(onClick = { runCatching { context.startActivity(ShizukuSetup.download()) } }) { Text("Download Stellar") }
+        com.eggman.backstage.ui.components.PrivilegeManagerButtons()
         LinearProgressIndicator(progress = { if (total == 0) 1f else done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
         if (probe.privileged) {
             FilledTonalButton(onClick = { withConsent { setUpEverything() } }, enabled = !settingUp, modifier = Modifier.fillMaxWidth()) {
@@ -186,12 +210,7 @@ fun SetupScreen(onOpenSettings: () -> Unit, onDone: () -> Unit, modifier: Modifi
                 }
             }
         }
-        Button(onClick = {
-            SettingsStores.get(context).onboardingDone = true
-            onDone()
-        }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (PermissionChecklist.blockers(items).isEmpty()) "Done" else "Continue anyway")
-        }
+        Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
     }
     afterConsent?.let { action ->
         AccessibilityDisclosureDialog(

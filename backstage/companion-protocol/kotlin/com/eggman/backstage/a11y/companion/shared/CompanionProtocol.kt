@@ -2,14 +2,21 @@ package com.eggman.backstage.a11y.companion
 
 /** Versioned deliberately: an incompatible companion fails closed with an update hint. */
 object CompanionProtocol {
-    const val VERSION = 2
+    const val VERSION = 3
     const val MIN_VERSION = 2
     const val CAP_SCREEN = 1
     const val CAP_SHELL = 2
     const val CAP_PACKAGES = 4
+    const val CAP_ACCESSIBILITY_SETTINGS = 8
+    const val CAP_OMP = 16
+    const val CAP_SKILL_SCRIPTS = 32
+    const val MAX_SKILL_ARCHIVE_BYTES = 48 * 1024
+    const val MAX_SKILL_UNPACKED_BYTES = 1024 * 1024
 
     fun supports(version: Int): Boolean = version >= MIN_VERSION
     const val PLAY_PACKAGE = "com.eggman.backstage.play"
+    /** Screenshots cross the pipe as JPEG: the agent re-encodes them as JPEG for the model anyway. */
+    const val SCREENSHOT_JPEG_QUALITY = 90
     const val PACKAGE = "com.eggman.backstage.agent"
     const val SERVICE = "com.eggman.backstage.companion.CompanionService"
     const val ACCESSIBILITY_SERVICE = "com.eggman.backstage.companion.AgentAccessibilityService"

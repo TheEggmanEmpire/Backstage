@@ -29,6 +29,25 @@ class CompanionIntegrationTest {
         assertTrue(CompanionProtocol.supports(3))
     }
 
+    @Test fun accessibilitySettingsCarryOnlyTheCompanionPreferences() {
+        val preferences = com.eggman.backstage.data.Settings(com.eggman.backstage.data.MemoryStore())
+        assertFalse(preferences.autoEnableAccessibility)
+        assertFalse(preferences.detectorPause)
+        preferences.autoEnableAccessibility = true
+        preferences.detectorPause = true
+        preferences.detectorPauseDelayMs = 13_000
+        preferences.detectorPackages = "example.detector"
+        preferences.accessibilityConsent = true
+
+        val bundle = CompanionAccessibilitySettings.from(preferences).toBundle()
+        assertEquals(setOf("autoEnable", "pauseForDetector", "recheckSeconds", "detectorPackages"), bundle.keySet())
+        assertTrue(bundle.getBoolean("autoEnable"))
+        assertTrue(bundle.getBoolean("pauseForDetector"))
+        assertEquals(13, bundle.getInt("recheckSeconds"))
+        assertEquals("example.detector", bundle.getString("detectorPackages"))
+        assertFalse(preferences.mayAutoEnableAccessibility)
+    }
+
     @Test fun theRemoteCompatibilityContextHasNoLocalScreenConnectionButStillStartsNormalIntents() {
         val app = RuntimeEnvironment.getApplication()
         val context = RemoteAccessibilityContext(app)
@@ -92,6 +111,8 @@ class CompanionIntegrationTest {
     }
 
     private class Endpoint : IAgentCompanion.Stub() {
+        override fun updateAccessibilitySettings(settings: android.os.Bundle) = false
+        override fun ompRequest(request: android.os.Bundle) = android.os.Bundle()
         override fun metadata() = android.os.Bundle()
         override fun privilegedRequest(request: android.os.Bundle) = android.os.Bundle()
         var actions = 0

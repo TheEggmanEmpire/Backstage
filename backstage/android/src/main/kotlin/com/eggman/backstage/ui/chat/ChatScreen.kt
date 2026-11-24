@@ -181,7 +181,9 @@ internal fun ChatTargetRow(vm: AgentViewModel, modifier: Modifier = Modifier) {
         if (adbAvailable) {
             Spacer(Modifier.size(4.dp))
             FilterChip(selected = adbAutoApprove, onClick = { vm.settings.adbAutoApprove = !adbAutoApprove },
-                modifier = Modifier.semantics { contentDescription = "ADB auto: run shell commands without asking" },
+                modifier = Modifier.semantics { contentDescription =
+                    if (com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION) "ADB auto: approve in Backstage-play-agent"
+                    else "ADB auto: run shell commands without asking" },
                 label = { Text("ADB auto", fontSize = 12.sp) })
         }
         FilterChip(

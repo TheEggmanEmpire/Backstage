@@ -7,7 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 
-/** The only screen-reading/acting service for the optional agent companion. The service has no agent or model runtime. */
+/** The companion screen service forwards only the event data requested by its connected client. */
 class AgentAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private val pending = LinkedHashMap<Pair<Int, String>, CompanionEvent>()
@@ -21,6 +21,9 @@ class AgentAccessibilityService : AccessibilityService() {
         if (event == null || CompanionRuntime.backend?.service !== this || !CompanionRuntime.consent(this)) return
         val pkg = event.packageName?.toString().orEmpty().take(255)
         if (pkg == packageName) return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.displayId == android.view.Display.DEFAULT_DISPLAY) {
+            CompanionRuntime.onForeground(applicationContext, pkg)
+        }
         if (event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
             val n = event.parcelableData as? Notification
             val title = n?.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
@@ -36,6 +39,8 @@ class AgentAccessibilityService : AccessibilityService() {
                 // that should reset settle detection. No raw accessibility objects or view text leave this callback.
                 if (pending.isEmpty()) handler.postDelayed(flush, 50)
                 pending[event.displayId to pkg] = CompanionEvent(event.eventType, event.displayId, pkg)
+                // Coalesce per display AND package, so a Backstage phone overlay cannot overwrite a foreign event
+                // that should reset settle detection. No raw accessibility objects or view text leave this callback.
                 if (pending.size > 64) pending.remove(pending.keys.first())
             }
             else -> Unit // No unrelated accessibility event types are forwarded to the agent.
@@ -47,9 +52,12 @@ class AgentAccessibilityService : AccessibilityService() {
         return super.onUnbind(intent)
     }
     override fun onDestroy() { clear(); super.onDestroy() }
-    private fun clear() {
+    internal fun clearPendingEvents() {
         handler.removeCallbacks(flush)
         pending.clear()
+    }
+    private fun clear() {
+        clearPendingEvents()
         CompanionRuntime.disconnected(this)
     }
 }

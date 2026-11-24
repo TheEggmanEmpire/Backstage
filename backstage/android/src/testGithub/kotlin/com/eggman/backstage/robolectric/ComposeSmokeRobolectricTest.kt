@@ -2,6 +2,7 @@ package com.eggman.backstage.robolectric
 
 import android.app.Application
 import android.content.Intent
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -82,9 +83,9 @@ class ComposeSmokeRobolectricTest {
         compose.onNodeWithText("Read the GPL-3.0").assertExists()
     }
 
-    @Test fun firstRunOpensTheSetupChecklist() {
+    @Test fun firstRunOpensTheSetupWizard() {
         start(onboarded = false)
-        compose.onNodeWithText("Set up Backstage").assertExists()
+        compose.onNodeWithText("Welcome to Backstage").assertExists()
     }
 
     /** : every permission-gated device tool has a request path in the checklist. */
@@ -95,7 +96,15 @@ class ComposeSmokeRobolectricTest {
         // Robolectric allows "modify system settings" by default; a fresh install does not have it.
         org.robolectric.Shadows.shadowOf(app.getSystemService(android.app.AppOpsManager::class.java)).setMode(
             android.app.AppOpsManager.OPSTR_WRITE_SETTINGS, android.os.Process.myUid(), app.packageName, android.app.AppOpsManager.MODE_ERRORED)
-        start(onboarded = false)
+        start()
+        tab("Agent settings")
+        val about = hasText("Backup & about")
+        compose.onNode(hasScrollAction() and hasAnyDescendant(about)).performScrollToNode(about)
+        compose.onNodeWithText("Backup & about").performClick()
+        val checklist = hasText("Setup checklist")
+        compose.onNode(hasScrollAction() and hasAnyDescendant(checklist)).performScrollToNode(checklist)
+        compose.onNode(checklist).performClick()
+        compose.waitForIdle()
         fun allow(title: String) {
             val button = androidx.compose.ui.test.hasText("Allow") and androidx.compose.ui.test.hasAnySibling(hasText("$title · optional"))
             compose.onNode(hasScrollAction()).performScrollToNode(button)

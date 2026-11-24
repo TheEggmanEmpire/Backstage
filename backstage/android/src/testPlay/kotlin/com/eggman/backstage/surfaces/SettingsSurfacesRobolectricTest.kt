@@ -1,6 +1,8 @@
 package com.eggman.backstage.surfaces
 
 import android.app.Application
+import android.os.Binder
+import android.provider.Settings.Secure
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -20,8 +22,17 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import com.eggman.backstage.agent.AndroidAgentEnvironment
+import com.eggman.backstage.agent.ReadinessCheck
 import com.eggman.backstage.data.InMemoryMemory
+import com.eggman.backstage.data.Provider
+import com.eggman.backstage.data.Settings
+import com.eggman.backstage.host.DesktopHost
+import com.eggman.backstage.host.DesktopHostExtras
+import com.eggman.backstage.host.DesktopHosts
+import com.eggman.backstage.privileged.Privileged
 import com.eggman.backstage.exec.AppEntry
+import com.eggman.backstage.testutil.FakeDesktopHost
 import com.eggman.backstage.tools.HttpResult
 import com.eggman.backstage.ui.licenses.LicensesScreen
 import com.eggman.backstage.ui.licenses.licenseText
@@ -36,6 +47,8 @@ import com.eggman.backstage.ui.settings.RemoteMcpSection
 import com.eggman.backstage.ui.settings.RulesSection
 import com.eggman.backstage.ui.settings.SettingsServices
 import com.eggman.backstage.ui.settings.SettingsStores
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -49,6 +62,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
+import rikka.shizuku.Shizuku
 
 /** Accessibility consent, module settings and offline license text as rendered Compose UI. */
 @RunWith(RobolectricTestRunner::class)
@@ -106,23 +121,95 @@ class SettingsSurfacesRobolectricTest {
         assertTrue(agreed)
     }
 
-    @Test fun setupOffersTheSeparatelyConsentedPlayCompanion() {
-        playContent { PlaySetupScreen(onOpenSettings = {}, onDone = {}) }
+    @Test fun setupRequiresPrivilegeBeforeOfferingProviderSetup() {
+        playContent { PlaySetupScreen(onDone = {}) }
         compose.onNodeWithText("Next").performClick()
+        compose.onNodeWithText("Next").assertIsNotEnabled()
+        compose.onNodeWithText("Get Stellar").assertExists()
+        compose.onNodeWithText("Get Shizuku Plus").assertExists()
+        compose.onNodeWithText("Skip for now").assertDoesNotExist()
+    }
+
+    @Test fun onboardingModelSelectionBecomesTheActiveMainModel() = MockWebServer().use { models ->
+        models.start()
+        models.enqueue(MockResponse().setBody("""{"data":[{"id":"onboarding-test-model","display_name":"Onboarding test"}]}"""))
+        val settings = Settings(app)
+        val env = AndroidAgentEnvironment(app)
+        val previousHost = DesktopHosts.current
+        val mirrorService = "com.eggman.backstage.play/moe.n4tsu.dextop.MirrorService"
+        val resolver = app.contentResolver
+        val previousServices = Secure.getString(resolver, Secure.ENABLED_ACCESSIBILITY_SERVICES)
+        val previousEnabled = Secure.getString(resolver, Secure.ACCESSIBILITY_ENABLED)
+        assertFalse(ReadinessCheck.compute(env.readinessInputs()).providerConfigured)
+        SettingsStores.set(CoreSettingsStore(settings))
+        DesktopHosts.current = object : DesktopHost by FakeDesktopHost(), DesktopHostExtras {
+            override fun setMiniStatus(text: String?) = Unit
+            override fun setMiniShape(shape: String) = true
+            override fun miniShape() = DesktopHostExtras.SHAPE_ROUNDED
+            override fun usePrivilegeProvider(provider: String) = false
+            override fun desktopAccessibilityComponent() = mirrorService
+        }
+        playContent { PlaySetupScreen(onDone = {}) }
         compose.onNodeWithText("Next").performClick()
-        compose.onNodeWithText("Next").performClick()
-        compose.waitForIdle()
+        ReflectionHelpers.setStaticField(Shizuku::class.java, "binder", Binder())
+        ReflectionHelpers.setStaticField(Shizuku::class.java, "permissionGranted", true)
+        try {
+            compose.runOnIdle { Privileged.notifyChanged() }
+            compose.onNodeWithText("Next").assertIsEnabled().performClick()
+            compose.onNodeWithText("Allow desktop accessibility").assertExists()
+            compose.onNodeWithText("Next").assertIsNotEnabled()
+            compose.onAllNodesWithText("Open Accessibility")[0].performClick()
+            compose.onNodeWithText("Open app details").assertExists()
+            compose.onAllNodesWithText("Open Accessibility")[1].assertExists()
+            compose.onNodeWithText(AccessibilityDisclosure.TITLE).assertExists()
+            compose.onNodeWithText(AccessibilityDisclosure.DECLINE).performClick()
+            compose.runOnIdle { settings.accessibilityConsent = true }
+            compose.onNodeWithText("Next").assertIsNotEnabled()
+            compose.runOnIdle {
+                Secure.putString(resolver, Secure.ENABLED_ACCESSIBILITY_SERVICES, mirrorService)
+                Secure.putInt(resolver, Secure.ACCESSIBILITY_ENABLED, 1)
+            }
+            compose.onNodeWithText("Enabled").assertExists()
+            compose.onNodeWithText("Next").assertIsEnabled().performClick()
+            compose.onNodeWithText("Next").assertIsNotEnabled()
+            compose.onNodeWithText("Sign in with ChatGPT (paid plan)").assertExists()
+            compose.onNodeWithText("API key").assertDoesNotExist()
+            compose.onNodeWithText("Use your own API key (BYOK)").performClick()
+            compose.onNodeWithText("Base URL").assertExists()
+            compose.onNodeWithText("Main model / add model ID").assertDoesNotExist()
+            compose.onNodeWithText("API key").performTextInput("test-onboarding-key")
+            compose.onNodeWithText("Base URL").performTextReplacement(models.url("/").toString())
+            compose.onNodeWithText("Next").assertIsEnabled().performScrollTo().performClick()
+            compose.onNodeWithText("Choose your model").assertExists()
+            compose.onNodeWithText("Next").assertIsNotEnabled()
+            compose.waitUntil(timeoutMillis = 10_000) {
+                compose.onAllNodesWithText("onboarding-test-model").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText("onboarding-test-model").performClick()
+            compose.onNodeWithText("Next").assertIsEnabled().performScrollTo().performClick()
+        } finally {
+            ReflectionHelpers.setStaticField(Shizuku::class.java, "binder", null)
+            ReflectionHelpers.setStaticField(Shizuku::class.java, "permissionGranted", false)
+            DesktopHosts.current = previousHost
+            Secure.putString(resolver, Secure.ENABLED_ACCESSIBILITY_SERVICES, previousServices)
+            Secure.putString(resolver, Secure.ACCESSIBILITY_ENABLED, previousEnabled)
+        }
         compose.onNodeWithText("Let the agent operate apps").assertExists()
-        compose.onNodeWithText("Get Backstage Agent").assertExists()
-        compose.onNodeWithText("Backstage Agent is separate because Google Play rules do not allow AI to operate apps through accessibility in a Play app.", substring = true).assertExists()
-        assertFalse(store.accessibilityConsent)
-        assertNull("setup does not auto-open the companion", shadowOf(app).nextStartedActivity)
+        compose.onNodeWithText("Get Backstage-play-agent").assertExists()
+        compose.onNodeWithText("If Google Play Protect asks before installing, choose to install without scanning.").assertExists()
+        compose.onNodeWithText("I installed it").assertDoesNotExist()
+        compose.onNodeWithText("Finish setup").assertIsNotEnabled()
+        SettingsStores.set(null)
+        val restarted = AndroidAgentEnvironment(app)
+        assertEquals(Provider.ANTHROPIC, restarted.settings.provider)
+        assertEquals("onboarding-test-model", restarted.settings.model())
+        assertTrue(ReadinessCheck.compute(restarted.readinessInputs()).providerConfigured)
     }
 
     @Test fun accessibilitySettingsExplainThePlayCompanionBoundary() {
         scrolling { AccessibilitySection(store) }
         compose.onNodeWithText("Accessibility").assertExists()
-        compose.onNodeWithText("Enable desktop accessibility through Dextop setup. Backstage Agent handles optional AI screen access.")
+        compose.onNodeWithText("Enable desktop accessibility through Dextop setup. Backstage-play-agent provides AI screen access.")
             .assertExists()
         assertTrue(compose.onAllNodes(isToggleable()).fetchSemanticsNodes().isEmpty())
         assertFalse(store.accessibilityConsent)

@@ -93,9 +93,16 @@ fun SettingsScreen(
         if (openUpdatesRequest > 0 && updatesAvailable) { query = ""; destination = SettingsGroup.UPDATES }
     }
     val desktopAvailable = com.eggman.backstage.host.DesktopHosts.current != null
-    val results = remember(query, desktopAvailable, updatesAvailable, onOpenAppSettings != null) {
+    val companionSettings = availableCompanionSettings()
+    val adbAvailable = !PLAY_DISTRIBUTION || CompanionSetting.SHELL in companionSettings
+    val skillScriptsAvailable = !PLAY_DISTRIBUTION || CompanionSetting.SKILL_SCRIPTS in companionSettings
+    val ompAvailable = !PLAY_DISTRIBUTION || CompanionSetting.OMP in companionSettings
+    androidx.compose.runtime.LaunchedEffect(ompAvailable, destination) {
+        if (!ompAvailable && destination == SettingsGroup.OMP) destination = null
+    }
+    val results = remember(query, desktopAvailable, updatesAvailable, onOpenAppSettings != null, companionSettings) {
         val tools = if (query.isNotBlank()) SettingsSearch.mcpTools(McpToolChoices.all()) else emptyList()
-        SettingsSearch.search(query, tools).filter {
+        SettingsSearch.search(query, tools, companionSettings).filter {
             (it.group != SettingsGroup.DESKTOP || desktopAvailable) &&
                 (it.group != SettingsGroup.UPDATES || updatesAvailable) &&
                 (it.group != SettingsGroup.APP || onOpenAppSettings != null)
@@ -150,8 +157,8 @@ fun SettingsScreen(
             }
             SettingsCard(SettingsGroup.AGENT, destination) { AgentWorkflowSettings(store) }
             SettingsCard(SettingsGroup.SAFETY, destination) {
-                SafetySettings(store)
-                if (!PLAY_DISTRIBUTION) SkillScriptsSettingsSection(store)
+                SafetySettings(store, adbAvailable)
+                if (skillScriptsAvailable) SkillScriptsSettingsSection(store)
             }
             SettingsCard(SettingsGroup.SCREEN, destination) { ScreenSettings(store) }
             if (desktopAvailable) SettingsCard(SettingsGroup.DESKTOP, destination) { DesktopPopupSettings(store) }
@@ -166,7 +173,7 @@ fun SettingsScreen(
                 RemoteMcpSection(store)
             }
             SettingsCard(SettingsGroup.AUTOMATION, destination) { AutomationSection(store) }
-            if (!PLAY_DISTRIBUTION) SettingsCard(SettingsGroup.OMP, destination) { OmpSettingsSection(store) }
+            if (ompAvailable) SettingsCard(SettingsGroup.OMP, destination) { DistributionOmpSettingsSection(store) }
             if (updatesAvailable) SettingsCard(SettingsGroup.UPDATES, destination) { com.eggman.backstage.update.UpdatesSection() }
             SettingsCard(SettingsGroup.ABOUT, destination) { BackupAboutSettings(onOpenSetup, onOpenLicenses) }
         }
@@ -257,6 +264,9 @@ private fun BackupAboutSettings(onOpenSetup: () -> Unit, onOpenLicenses: () -> U
             OutlinedButton(onClick = onOpenSetup) { Text("Setup checklist") }
             OutlinedButton(onClick = onOpenLicenses) { Text("Open-source licenses") }
         }
+        Text("Desktop access", style = MaterialTheme.typography.labelLarge)
+        Text("The desktop needs Stellar or Shizuku Plus.", style = MaterialTheme.typography.bodySmall)
+        com.eggman.backstage.ui.components.PrivilegeManagerButtons()
         Text("Backup", style = MaterialTheme.typography.labelLarge)
         Text("Save or restore all Backstage, desktop and Linux settings, API keys and tokens, and your own skills as a .zip file. Skills synced from GitHub are downloaded again after import; skills too large for the backup are left out with a warning.", style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -296,78 +306,74 @@ private fun BackupAboutSettings(onOpenSetup: () -> Unit, onOpenLicenses: () -> U
 /** One sign-in flow per process: it must outlive the screen while the user is in the browser. */
 private var chatGptSignIn: ChatGptSignIn? = null
 
-private fun chatGptSignIn(store: BackstageSettingsStore): ChatGptSignIn =
-    chatGptSignIn ?: ChatGptSignIn(save = { store.chatGptTokens = it }).also { chatGptSignIn = it }
+private fun chatGptSignIn(store: BackstageSettingsStore, connectivity: ConnectivityManager): ChatGptSignIn =
+    chatGptSignIn ?: ChatGptSignIn(
+        save = { store.chatGptTokens = it },
+        connectivityRestored = connectivity.signInConnectivityRestored(),
+    ).also { chatGptSignIn = it }
 
 @Composable
-private fun ChatGptAccount(store: BackstageSettingsStore, onChanged: () -> Unit) {
+internal fun ChatGptAccount(store: BackstageSettingsStore, onChanged: () -> Unit) {
     val context = LocalContext.current
-    // The flow outlives this screen: hand it the application context, never the Activity.
     val app = context.applicationContext
-    val flow = remember { chatGptSignIn(store) }
+    val flow = remember(store, app) { chatGptSignIn(store, app.getSystemService(ConnectivityManager::class.java)) }
     val state by flow.state.collectAsState()
-    var tokens by remember { mutableStateOf(store.chatGptTokens) }
+    var tokens by remember(store) { mutableStateOf(store.chatGptTokens) }
     androidx.compose.runtime.LaunchedEffect(state) {
-        if (state is ChatGptSignIn.State.Done) { tokens = store.chatGptTokens; onChanged() }
-    }
-    val openUrl: (String) -> Unit = { url ->
-        runCatching {
-            app.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-        }
+        if (state == ChatGptSignIn.State.Done) { tokens = store.chatGptTokens; onChanged() }
     }
     val t = tokens
     if (t != null) {
         val who = listOf(t.email, t.plan.replaceFirstChar { it.uppercase() }).filter { it.isNotBlank() }.joinToString(" · ")
         Text("Signed in" + if (who.isNotEmpty()) " as $who" else "", style = MaterialTheme.typography.bodyMedium)
-        Text("Model calls use your ChatGPT plan's limits, not API credit.", style = MaterialTheme.typography.bodySmall)
+        Text("Model calls use your ChatGPT plan's limits.", style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = { flow.signOut(); tokens = null; onChanged() }) { Text("Sign out") }
         return
     }
+
     when (val s = state) {
-        is ChatGptSignIn.State.Browser -> {
-            Text("Finish signing in in the browser, then come back here.", style = MaterialTheme.typography.bodyMedium)
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-            var pasted by remember { mutableStateOf("") }
-            Text("If the browser ends on a page that cannot be opened, copy its address and paste it here:", style = MaterialTheme.typography.bodySmall)
-            OutlinedTextField(pasted, { pasted = it }, Modifier.fillMaxWidth(), singleLine = true,
-                label = { Text("Address from the browser") }, placeholder = { Text("http://localhost:1455/auth/callback?code=…") })
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { flow.submitRedirect(pasted) }, enabled = pasted.isNotBlank()) { Text("Use address") }
-                TextButton(onClick = { openUrl(s.url) }) { Text("Open browser again") }
-                TextButton(onClick = { flow.cancel() }) { Text("Cancel") }
-            }
-        }
         is ChatGptSignIn.State.Code -> {
-            Text("On any device, open ${s.device.verificationUrl}, sign in and enter this code:", style = MaterialTheme.typography.bodyMedium)
+            Text("2. Copy this code.", style = MaterialTheme.typography.bodyMedium)
             Text(s.device.userCode, style = MaterialTheme.typography.headlineMedium)
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { openUrl(s.device.verificationUrl) }) { Text("Open page") }
-                TextButton(onClick = { copyToClipboard(context, "ChatGPT code", s.device.userCode) }) { Text("Copy code") }
-                TextButton(onClick = { flow.cancel() }) { Text("Cancel") }
+            OutlinedButton(onClick = { copyToClipboard(context, "ChatGPT code", s.device.userCode, sensitive = true) }) {
+                Text("Copy code")
             }
-            Text("The code is valid for 15 minutes.", style = MaterialTheme.typography.bodySmall)
+            Text("3. Open the sign-in page, sign in to ChatGPT and enter the code.", style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(onClick = {
+                runCatching {
+                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(s.device.verificationUrl))
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    app.startActivity(intent)
+                }
+            }) { Text("Open sign-in page") }
+            Text("4. Return to Backstage. It connects automatically.", style = MaterialTheme.typography.bodyMedium)
+            Text("Waiting for approval…", style = MaterialTheme.typography.bodySmall)
+            if (s.networkError == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+            else Text(s.networkError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (s.networkError != null) OutlinedButton(onClick = flow::retry) { Text("Retry") }
+                TextButton(onClick = flow::cancel) { Text("Cancel") }
+            }
         }
-        ChatGptSignIn.State.Finishing -> {
-            Text("Connecting your ChatGPT account…", style = MaterialTheme.typography.bodyMedium)
+        ChatGptSignIn.State.Requesting -> {
+            Text("Requesting a sign-in code…", style = MaterialTheme.typography.bodyMedium)
             LinearProgressIndicator(Modifier.fillMaxWidth())
+            TextButton(onClick = flow::cancel) { Text("Cancel") }
         }
         else -> {
-            (s as? ChatGptSignIn.State.Failed)?.let { Text(it.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            Text("Use a ChatGPT Plus, Pro, Business or Enterprise subscription instead of an API key.", style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                androidx.compose.material3.Button(onClick = { flow.startBrowser(openUrl) }) { Text("Sign in with ChatGPT") }
-                OutlinedButton(onClick = { flow.startCode() }) { Text("Use a code instead") }
+            val failure = s as? ChatGptSignIn.State.Failed
+            failure?.let { Text(it.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            Text("Use a ChatGPT Plus, Pro, Business or Enterprise subscription.", style = MaterialTheme.typography.bodySmall)
+            if (failure?.canRetry != true) Text("1. Tap Get code.", style = MaterialTheme.typography.bodyMedium)
+            androidx.compose.material3.Button(onClick = if (failure?.canRetry == true) flow::retry else flow::startCode) {
+                Text(if (failure?.canRetry == true) "Retry" else "Get code")
             }
-            Text("\"Use a code\" works when the browser on this phone cannot sign in: approve the code on a computer or another phone. " +
-                "It may need device code sign-in allowed in ChatGPT → Settings → Security.", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
 
 @Composable
-internal fun ProviderSection(store: BackstageSettingsStore) {
+internal fun ProviderSection(store: BackstageSettingsStore, apiKeyOnly: Boolean = false, credentialsOnly: Boolean = false) {
     SettingsSection("AI provider", "Bring your own key. Requests go straight from this phone to the provider you pick.") {
         if (!PLAY_DISTRIBUTION) {
             var engine by remember { mutableStateOf(store.agentEngine) }
@@ -385,13 +391,14 @@ internal fun ProviderSection(store: BackstageSettingsStore) {
                 "Uses the installed OMP harness and privileged access. Falls back to Backstage when unavailable. omp's own shell tools run with shell-user access."
                 else "The native Backstage agent loop.", style = MaterialTheme.typography.bodySmall)
         }
-        var providerId by remember { mutableStateOf(store.providerId) }
+        val options = if (apiKeyOnly) ProviderOptions.all.filterNot { it.id == com.eggman.backstage.data.Provider.CHATGPT.name } else ProviderOptions.all
+        var providerId by remember(store) { mutableStateOf(store.providerId) }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ProviderOptions.all.forEach { p ->
+            options.forEach { p ->
                 FilterChip(providerId == p.id, { providerId = p.id; store.providerId = p.id }, { Text(p.label) })
             }
         }
-        val option = ProviderOptions.byId(providerId) ?: return@SettingsSection
+        val option = options.firstOrNull { it.id == providerId } ?: return@SettingsSection
         key(providerId) {
             var apiKey by remember { mutableStateOf(store.apiKey(providerId)) }
             var model by remember { mutableStateOf(store.model(providerId)) }
@@ -405,47 +412,58 @@ internal fun ProviderSection(store: BackstageSettingsStore) {
                 label = { Text(if (option.needsKey) "API key" else "API key (optional)") }, placeholder = { Text(option.keyHint) },
                 singleLine = true, visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Hide" else "Show") } })
-            ProviderModelsSection(store, providerId, apiKey, url, model) { model = it; modelDraft = it }
-            OutlinedTextField(modelDraft, { modelDraft = it }, Modifier.fillMaxWidth(),
-                label = { Text("Main model / add model ID") }, supportingText = { Text("Chat uses the main model. Enter an ID and tap Use to add/select it; needs tool calling, vision recommended.") }, singleLine = true,
-                trailingIcon = { TextButton(onClick = {
-                    model = modelDraft.trim(); modelDraft = model; store.setModel(providerId, model)
-                }, enabled = modelDraft.isNotBlank()) { Text("Use") } })
-            OutlinedTextField(url, { url = it; store.setBaseUrl(providerId, it) }, Modifier.fillMaxWidth(),
-                label = { Text("Base URL") }, singleLine = true)
-            var ctxText by remember { mutableStateOf(store.contextOverride(providerId)?.toString().orEmpty()) }
-            var effective by remember { mutableStateOf(store.contextWindow(providerId)) }
-            var caps by remember { mutableStateOf(store.visionSupported(providerId) to store.toolsSupported(providerId)) }
-            androidx.compose.runtime.LaunchedEffect(model, apiKey, url) {
-                kotlinx.coroutines.delay(1_000)
-                store.detectContext(providerId)
-                effective = store.contextWindow(providerId)
-                caps = store.visionSupported(providerId) to store.toolsSupported(providerId)
+            if (!credentialsOnly) {
+                ProviderModelsSection(store, providerId, apiKey, url, model) { model = it; modelDraft = it }
+                OutlinedTextField(modelDraft, { modelDraft = it }, Modifier.fillMaxWidth(),
+                    label = { Text("Main model / add model ID") }, supportingText = { Text("Chat uses the main model. Enter an ID and tap Use to add/select it; needs tool calling, vision recommended.") }, singleLine = true,
+                    trailingIcon = { TextButton(onClick = {
+                        model = modelDraft.trim(); modelDraft = model; store.setModel(providerId, model)
+                    }, enabled = modelDraft.isNotBlank()) { Text("Use") } })
             }
-            OutlinedTextField(ctxText, { v ->
-                ctxText = v.filter(Char::isDigit).take(9)
-                store.setContextOverride(providerId, ctxText.toLongOrNull())
-                effective = store.contextWindow(providerId)
-            }, Modifier.fillMaxWidth(), label = { Text("Context window (tokens)") },
-                placeholder = { Text("Automatic") }, singleLine = true,
-                supportingText = { Text("In use: ${"%,d".format(effective)} tokens" + if (ctxText.isEmpty()) " (from the provider's model list or defaults; type a number to override)" else " (your value)") })
-            val visionLabel = if (caps.first) "yes" else "no"
-            val toolsLabel = when (caps.second) { true -> "yes"; false -> "no"; null -> "unknown" }
-            Text("From the model list — vision: $visionLabel · tools: $toolsLabel", style = MaterialTheme.typography.bodySmall)
-            var visionChoice by remember { mutableStateOf(store.visionOverride(providerId)) }
-            Text("Vision", style = MaterialTheme.typography.bodySmall)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(visionChoice == null, { visionChoice = null; store.setVisionOverride(providerId, null); effective = store.contextWindow(providerId); caps = store.visionSupported(providerId) to store.toolsSupported(providerId) }, { Text("Auto") })
-                FilterChip(visionChoice == true, { visionChoice = true; store.setVisionOverride(providerId, true); caps = store.visionSupported(providerId) to store.toolsSupported(providerId) }, { Text("On") })
-                FilterChip(visionChoice == false, { visionChoice = false; store.setVisionOverride(providerId, false); caps = store.visionSupported(providerId) to store.toolsSupported(providerId) }, { Text("Off") })
+            var showEndpoint by remember { mutableStateOf(apiKeyOnly || !PLAY_DISTRIBUTION) }
+            if (PLAY_DISTRIBUTION && !apiKeyOnly) TextButton(onClick = { showEndpoint = !showEndpoint }) {
+                Text(if (showEndpoint) "Hide advanced endpoint settings" else "Advanced endpoint settings")
             }
-            Text(when (visionChoice) { null -> "Auto: from the model list, else the model's default."; true -> "Screenshots are sent to this model."; false -> "No screenshots sent to this model." }, style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { model = option.defaultModel; modelDraft = model; url = option.defaultBaseUrl
-                    store.setModel(providerId, model); store.setBaseUrl(providerId, url) }) { Text("Reset to defaults") }
-            }
-            ProviderOptions.validate(option, apiKey, model, url).forEach {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            if (showEndpoint) OutlinedTextField(url, { url = it; store.setBaseUrl(providerId, it) }, Modifier.fillMaxWidth(),
+                label = { Text("Base URL") }, singleLine = true,
+                supportingText = {
+                    if (PLAY_DISTRIBUTION) ModuleSettingsLogic.insecureWarning(url)?.let { Text(it) }
+                })
+            if (!credentialsOnly) {
+                var ctxText by remember { mutableStateOf(store.contextOverride(providerId)?.toString().orEmpty()) }
+                var effective by remember { mutableStateOf(store.contextWindow(providerId)) }
+                var caps by remember { mutableStateOf(store.visionSupported(providerId) to store.toolsSupported(providerId)) }
+                androidx.compose.runtime.LaunchedEffect(model, apiKey, url) {
+                    kotlinx.coroutines.delay(1_000)
+                    store.detectContext(providerId)
+                    effective = store.contextWindow(providerId)
+                    caps = store.visionSupported(providerId) to store.toolsSupported(providerId)
+                }
+                OutlinedTextField(ctxText, { v ->
+                    ctxText = v.filter(Char::isDigit).take(9)
+                    store.setContextOverride(providerId, ctxText.toLongOrNull())
+                    effective = store.contextWindow(providerId)
+                }, Modifier.fillMaxWidth(), label = { Text("Context window (tokens)") },
+                    placeholder = { Text("Automatic") }, singleLine = true,
+                    supportingText = { Text("In use: ${"%,d".format(effective)} tokens" + if (ctxText.isEmpty()) " (from the provider's model list or defaults; type a number to override)" else " (your value)") })
+                val visionLabel = if (caps.first) "yes" else "no"
+                val toolsLabel = when (caps.second) { true -> "yes"; false -> "no"; null -> "unknown" }
+                Text("From the model list — vision: $visionLabel · tools: $toolsLabel", style = MaterialTheme.typography.bodySmall)
+                var visionChoice by remember { mutableStateOf(store.visionOverride(providerId)) }
+                Text("Vision", style = MaterialTheme.typography.bodySmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(visionChoice == null, { visionChoice = null; store.setVisionOverride(providerId, null); effective = store.contextWindow(providerId); caps = store.visionSupported(providerId) to store.toolsSupported(providerId) }, { Text("Auto") })
+                    FilterChip(visionChoice == true, { visionChoice = true; store.setVisionOverride(providerId, true); caps = store.visionSupported(providerId) to store.toolsSupported(providerId) }, { Text("On") })
+                    FilterChip(visionChoice == false, { visionChoice = false; store.setVisionOverride(providerId, false); caps = store.visionSupported(providerId) to store.toolsSupported(providerId) }, { Text("Off") })
+                }
+                Text(when (visionChoice) { null -> "Auto: from the model list, else the model's default."; true -> "Screenshots are sent to this model."; false -> "No screenshots sent to this model." }, style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { model = option.defaultModel; modelDraft = model; url = option.defaultBaseUrl
+                        store.setModel(providerId, model); store.setBaseUrl(providerId, url) }) { Text("Reset to defaults") }
+                }
+                ProviderOptions.validate(option, apiKey, model, url).forEach {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }
@@ -476,6 +494,7 @@ internal fun ProviderModelsSection(store: BackstageSettingsStore, providerId: St
     DisposableEffect(store, providerId, main) {
         val stop = store.observe { changed ->
             if (changed == "models_enabled_$providerId" || changed == "model_$providerId") enabled = store.enabledModels(providerId)
+            if (changed == "model_$providerId") onMain(store.model(providerId))
         }
         onDispose { stop() }
     }
@@ -487,13 +506,19 @@ internal fun ProviderModelsSection(store: BackstageSettingsStore, providerId: St
         } finally { loading = false }
     }
     val loaded = result as? com.eggman.backstage.llm.ModelListResult.Loaded
-    val models = (store.modelOptions(providerId) + provider.suggestedModels + loaded?.models.orEmpty().map { it.id } + loaded?.hidden.orEmpty().map { it.id } + enabled.sorted() + main)
+    val listed = loaded?.let { (it.models + it.hidden).map { model -> model.id } }.orEmpty()
+    val models = (store.modelOptions(providerId) + provider.suggestedModels + listed + enabled.sorted() + main)
         .filter(String::isNotBlank).distinct()
+    fun updateEnabled(ids: Set<String>, preferred: String? = null) {
+        store.setEnabledModels(providerId, ids, preferred)
+        enabled = store.enabledModels(providerId)
+        onMain(store.model(providerId))
+    }
     Text("Models", style = MaterialTheme.typography.labelLarge)
-    Text("Enable models for omp switching. Select one main model for Backstage chat; the main model stays on even after All off.", style = MaterialTheme.typography.bodySmall)
+    Text("Enable models for omp switching. Backstage chat uses the selected main model.", style = MaterialTheme.typography.bodySmall)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = { store.setEnabledModels(providerId, models.toSet()); enabled = store.enabledModels(providerId) }) { Text("All on") }
-        TextButton(onClick = { store.setEnabledModels(providerId, emptySet()); enabled = store.enabledModels(providerId) }) { Text("All off") }
+        TextButton(onClick = { updateEnabled(models.toSet()) }) { Text("All on") }
+        TextButton(onClick = { updateEnabled(emptySet()) }) { Text("All off") }
         TextButton(onClick = { refresh++ }, enabled = !loading) { Text("Reload models") }
     }
     if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -516,9 +541,10 @@ internal fun ProviderModelsSection(store: BackstageSettingsStore, providerId: St
                     store.setModel(providerId, id); enabled = store.enabledModels(providerId); onMain(id)
                 }, enabled = id in enabled)
                 Text(id + if (main == id) " (main)" else "", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                androidx.compose.material3.Switch(modifier = Modifier.semantics { contentDescription = "Enable $id" }, checked = id in enabled, enabled = main != id, onCheckedChange = { on ->
-                    store.setEnabledModels(providerId, if (on) enabled + id else enabled - id)
-                    enabled = store.enabledModels(providerId)
+                androidx.compose.material3.Switch(modifier = Modifier.semantics { contentDescription = "Enable $id" }, checked = id in enabled, onCheckedChange = { on ->
+                    val unavailable = listed.isNotEmpty() && listed.none { com.eggman.backstage.data.ModelIds.same(it, main) }
+                    val select = id.takeIf { on && (main !in enabled || unavailable) }
+                    updateEnabled(if (on) enabled + id else enabled - id, select)
                 })
             }
         }
@@ -560,7 +586,7 @@ private fun AgentWorkflowSettings(store: BackstageSettingsStore) {
 }
 
 @Composable
-private fun SafetySettings(store: BackstageSettingsStore) {
+private fun SafetySettings(store: BackstageSettingsStore, showAdbCommands: Boolean) {
     SettingToggle("Confirm before irreversible actions", "Sending, posting, buying, deleting or calling waits for your approval",
         { store.confirmActions }) { store.confirmActions = it }
     Text("When nobody can confirm", style = MaterialTheme.typography.labelLarge)
@@ -571,17 +597,21 @@ private fun SafetySettings(store: BackstageSettingsStore) {
         }
     }
     Text(unattendedDetail(unattended), style = MaterialTheme.typography.bodySmall)
-    if (!PLAY_DISTRIBUTION) {
+    if (showAdbCommands) {
         Text("ADB commands", style = MaterialTheme.typography.labelLarge)
         val adbAutoApprove by rememberAdbAutoApprove(store)
-        val adbAvailable by rememberAdbAvailable()
+        val adbAvailable = if (PLAY_DISTRIBUTION) true else rememberAdbAvailable().value
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FilterChip(!adbAutoApprove, { store.adbAutoApprove = false }, { Text("Ask each time") })
             FilterChip(adbAutoApprove, { store.adbAutoApprove = true }, { Text("Auto") })
         }
         Text(
-            if (adbAutoApprove) "Commands run without asking, as the shell user. Anything the agent decides to run — uninstalling apps, changing system settings — happens immediately."
-            else "The agent can run ADB shell commands (install, uninstall, pm, am, settings …) through Stellar, Shizuku or Dextop's wireless debugging. You approve each command.",
+            when {
+                PLAY_DISTRIBUTION && adbAutoApprove -> "Backstage-play-agent asks its owner to approve each command."
+                PLAY_DISTRIBUTION -> "Backstage asks first. Backstage-play-agent then asks its owner to approve the command and runs it as the shell user."
+                adbAutoApprove -> "Commands run without asking, as the shell user. Anything the agent decides to run — uninstalling apps, changing system settings — happens immediately."
+                else -> "The agent can run ADB shell commands (install, uninstall, pm, am, settings …) through Stellar, Shizuku or Dextop's wireless debugging. You approve each command."
+            },
             style = MaterialTheme.typography.bodySmall,
         )
         if (!adbAvailable) Text("Needs Stellar, Shizuku or Dextop wireless debugging.", style = MaterialTheme.typography.bodySmall)

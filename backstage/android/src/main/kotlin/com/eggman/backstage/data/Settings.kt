@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap
 interface KeyValueStore {
     fun getString(key: String): String?
     fun putString(key: String, value: String?)
+    fun putStrings(values: Map<String, String>) { values.forEach { (key, value) -> putString(key, value) } }
     fun getInt(key: String, def: Int): Int = getString(key)?.toIntOrNull() ?: def
     fun putInt(key: String, value: Int) = putString(key, value.toString())
     fun getLong(key: String, def: Long): Long = getString(key)?.toLongOrNull() ?: def
@@ -58,6 +59,9 @@ class SharedPrefsStore(private val prefs: SharedPreferences) : KeyValueStore {
     override fun getString(key: String): String? = runCatching { prefs.getString(key, null) }.getOrNull()
         ?: runCatching { prefs.all[key]?.toString() }.getOrNull()
     override fun putString(key: String, value: String?) { prefs.edit().apply { if (value == null) remove(key) else putString(key, value) }.apply() }
+    override fun putStrings(values: Map<String, String>) {
+        prefs.edit().apply { values.forEach { (key, value) -> putString(key, value) } }.apply()
+    }
     override fun getInt(key: String, def: Int): Int = runCatching { prefs.getInt(key, def) }.getOrElse { super.getInt(key, def) }
     override fun putInt(key: String, value: Int) { prefs.edit().putInt(key, value).apply() }
     override fun getLong(key: String, def: Long): Long = runCatching { prefs.getLong(key, def) }.getOrElse { super.getLong(key, def) }
@@ -145,23 +149,30 @@ class Settings(private val p: KeyValueStore, private val secrets: SecretCipher =
     fun setReasoningEffort(provider: Provider, effort: String?) = p.putString("effort_${provider.name}", effort)
 
     fun model(provider: Provider = this.provider): String =
-        p.getString("model_${provider.name}")?.takeIf { it.isNotBlank() } ?: provider.defaultModel
+        p.getString("model_${provider.name}") ?: provider.defaultModel
     fun setModel(provider: Provider, model: String) {
         val id = model.trim()
         rememberModelIds(provider, setOf(id))
         p.putString("model_${provider.name}", id)
     }
 
-    /** Explicit enabled set; the chat main is always implicitly on, including after All off. */
+    /** Include the selected ID when reading preferences that store it separately. */
     fun enabledModels(provider: Provider = this.provider): Set<String> {
         val stored = p.getString("models_enabled_${provider.name}")
         val ids = stored?.lines() ?: provider.recommended.map { it.id }.ifEmpty { listOf(provider.defaultModel) }
         return (ids + model(provider)).map(String::trim).filter(String::isNotEmpty).toSet()
     }
-    fun setEnabledModels(provider: Provider, models: Set<String>) {
-        val ids = models.map(String::trim).filter(String::isNotEmpty).toSet()
+    fun setEnabledModels(provider: Provider, models: Set<String>, preferred: String? = null) {
+        val ids = models.map(String::trim).filter(String::isNotEmpty).toSortedSet()
+        val current = model(provider)
         rememberModelIds(provider, ids)
-        p.putString("models_enabled_${provider.name}", ids.sorted().joinToString("\n"))
+        val next = preferred?.takeIf { it in ids }
+            ?: current.takeIf { it in ids }
+            ?: ids.firstOrNull().orEmpty()
+        p.putStrings(buildMap {
+            put("models_enabled_${provider.name}", ids.joinToString("\n"))
+            if (next != current) put("model_${provider.name}", next)
+        })
     }
     /** Keep manually selected/enabled IDs visible after switching them off or changing the main. */
     private fun rememberModelIds(provider: Provider, ids: Set<String>) {
@@ -276,6 +287,7 @@ class Settings(private val p: KeyValueStore, private val secrets: SecretCipher =
 
     /** Start a Dextop desktop session automatically when a task targets the desktop. */
     var autoStartDesktop: Boolean get() = p.getBoolean("desktop_autostart", true); set(v) = p.putBoolean("desktop_autostart", v)
+    val mayAutoStartDesktop: Boolean get() = onboardingDone && autoStartDesktop
     /** Restart a running desktop before each automation (schedule, Tasker, broadcast, MCP) for a clean screen. */
     var freshDesktopForAutomation: Boolean get() = p.getBoolean("desktop_fresh_for_automation", true); set(v) = p.putBoolean("desktop_fresh_for_automation", v)
 
@@ -373,7 +385,7 @@ class Settings(private val p: KeyValueStore, private val secrets: SecretCipher =
         get() = p.getInt("chat_threads_max", 100).coerceIn(5, 500)
         set(v) = p.putInt("chat_threads_max", v.coerceIn(5, 500))
     var historyLimit: Int get() = p.getInt("history_limit", 200); set(v) = p.putInt("history_limit", v.coerceIn(10, 5000))
-    var autoEnableAccessibility: Boolean get() = p.getBoolean("a11y_auto", true); set(v) = p.putBoolean("a11y_auto", v)
+    var autoEnableAccessibility: Boolean get() = p.getBoolean("a11y_auto", !PLAY_DISTRIBUTION); set(v) = p.putBoolean("a11y_auto", v)
     /** The user accepted the accessibility disclosure (what is read, what is done, where it goes); revocable in Settings. */
     var accessibilityConsent: Boolean get() = p.getBoolean("a11y_consent", false); set(v) = p.putBoolean("a11y_consent", v)
     /** Backstage may switch its accessibility service on by itself: only after the in-app consent, and while auto-enable is on. */
@@ -382,7 +394,7 @@ class Settings(private val p: KeyValueStore, private val secrets: SecretCipher =
      * Switch the accessibility service off while one of [detectorPackages] is in front, and back on after it left
      * (PayPay's false "unsafe" warning; see DetectorPause). On by default: the cost is a desktop restart per switch.
    */
-    var detectorPause: Boolean get() = !PLAY_DISTRIBUTION && p.getBoolean("a11y_pause_detectors", true); set(v) = p.putBoolean("a11y_pause_detectors", v)
+    var detectorPause: Boolean get() = p.getBoolean("a11y_pause_detectors", !PLAY_DISTRIBUTION); set(v) = p.putBoolean("a11y_pause_detectors", v)
     /** Re-check interval of a pause in ms; while a detector is still in front the pause is postponed (capped at 60 s). */
     var detectorPauseDelayMs: Int
         get() = p.getInt("a11y_pause_delay_ms", 5000).coerceIn(1000, 60000)
@@ -503,7 +515,7 @@ class Settings(private val p: KeyValueStore, private val secrets: SecretCipher =
         else AgentEngine.entries.firstOrNull { it.name == p.getString("agent_engine") } ?: AgentEngine.BACKSTAGE
         set(v) = p.putString("agent_engine", v.name)
 
-    var ompEnabled: Boolean get() = !PLAY_DISTRIBUTION && p.getBoolean("omp_enabled", false); set(v) = p.putBoolean("omp_enabled", v)
+    var ompEnabled: Boolean get() = p.getBoolean("omp_enabled", false); set(v) = p.putBoolean("omp_enabled", v)
     /** Executing bundled skill code is separately opted into; neither ADB Auto nor OMP Auto authorizes it. */
     var skillScriptsEnabled: Boolean get() = p.getBoolean("skill_scripts_enabled", false); set(v) = p.putBoolean("skill_scripts_enabled", v)
     var skillScriptsAutoApprove: Boolean get() = p.getBoolean("skill_scripts_auto_approve", false); set(v) = p.putBoolean("skill_scripts_auto_approve", v)

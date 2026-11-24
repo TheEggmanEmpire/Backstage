@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -64,6 +65,10 @@ object DesktopPaneRules {
 
     const val TITLE = "DeX desktop"
     const val START = "Start the desktop"
+    const val REFRESH = "Refresh picture"
+    const val REFRESH_GAP_MS = 300L
+    /** Automatic hide-and-show attempts while the picture stays black. */
+    const val AUTO_REFRESHES = 2
     const val COLLAPSE = "Hide the desktop view"
     const val EXPAND = "Show the desktop view"
     const val SHOW_HERE = "Show it in the chat"
@@ -123,6 +128,24 @@ internal fun DesktopPane(vm: AgentViewModel, modifier: Modifier = Modifier) {
         onDispose { host.removeListener(listener) }
     }
     var collapsed by remember { mutableStateOf(vm.settings.agentDesktopCollapsed) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var starting by remember { mutableStateOf(false) }
+    var startProblem by remember { mutableStateOf<DesktopStartGuard.Blocker?>(null) }
+    startProblem?.let { problem ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { startProblem = null },
+            title = { Text(problem.title) },
+            text = { Text(problem.message) },
+            confirmButton = {
+                Row {
+                    problem.actions.forEach { action ->
+                        TextButton(onClick = { action.run(context); startProblem = null }) { Text(action.label) }
+                    }
+                }
+            },
+            dismissButton = { TextButton(onClick = { startProblem = null }) { Text("Close") } },
+        )
+    }
     // The Agent tab is on screen (started): only then may the chat take the desktop.
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val onScreen = lifecycle.isAtLeast(Lifecycle.State.STARTED)
@@ -133,6 +156,26 @@ internal fun DesktopPane(vm: AgentViewModel, modifier: Modifier = Modifier) {
         SurfaceScope.launch { runCatching { host.setPresentation(p) } }
     }
     fun moveAway(p: Presentation) { userMovedIt = true; present(p) }
+    /** Re-route the display to the player: the same hide-and-show that brings back a black preview by hand. */
+    fun refreshPicture() {
+        SurfaceScope.launch {
+            runCatching {
+                host.setPresentation(Presentation.HIDDEN)
+                kotlinx.coroutines.delay(DesktopPaneRules.REFRESH_GAP_MS)
+                host.setPresentation(Presentation.IN_APP)
+            }
+        }
+    }
+    val showingHere = presentation == Presentation.IN_APP && onScreen && !collapsed
+    LaunchedEffect(showingHere) {
+        if (!showingHere) return@LaunchedEffect
+        repeat(DesktopPaneRules.AUTO_REFRESHES) {
+            kotlinx.coroutines.delay(com.eggman.backstage.host.PreviewHealth.CHECK_DELAY_MS)
+            val frame = runCatching { host.captureFrame() }.getOrNull()
+            if (!com.eggman.backstage.host.PreviewHealth.blank(frame)) return@LaunchedEffect
+            refreshPicture()
+        }
+    }
     LaunchedEffect(presentation, onScreen, userMovedIt) {
         DesktopPaneRules.autoShow(presentation, onScreen, userMovedIt)?.let(::present)
     }
@@ -144,6 +187,9 @@ internal fun DesktopPane(vm: AgentViewModel, modifier: Modifier = Modifier) {
             if (presentation != Presentation.NONE) {
                 if (presentation != Presentation.IN_APP) {
                     IconButton(onClick = { userMovedIt = false; present(Presentation.IN_APP) }) { Icon(Icons.Default.PlayArrow, DesktopPaneRules.SHOW_HERE) }
+                }
+                if (presentation == Presentation.IN_APP) {
+                    IconButton(onClick = { refreshPicture() }) { Icon(Icons.Default.Refresh, DesktopPaneRules.REFRESH) }
                 }
                 IconButton(onClick = { present(Presentation.FULL) }) { Icon(Icons.Default.Fullscreen, "Full screen") }
                 IconButton(onClick = { moveAway(Presentation.MINI) }) { Icon(Icons.Default.PictureInPictureAlt, "Pop out") }
@@ -166,9 +212,22 @@ internal fun DesktopPane(vm: AgentViewModel, modifier: Modifier = Modifier) {
                 DesktopPaneRules.Content.PLAYER -> ChatPlayer(host as? DesktopHostExtras, g?.width ?: 0, g?.height ?: 0)
                 DesktopPaneRules.Content.STATUS -> Text(DesktopPaneRules.status(presentation).replaceFirstChar { it.uppercase() },
                     color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
-                DesktopPaneRules.Content.START -> TextButton(onClick = {
-                    SurfaceScope.launch { runCatching { host.startDesktop(Presentation.IN_APP) } }
-                }) { Text(DesktopPaneRules.START) }
+                DesktopPaneRules.Content.START -> TextButton(enabled = !starting, onClick = {
+                    val blocked = if (com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION) DesktopStartGuard.blocker(context) else null
+                    if (blocked != null) startProblem = blocked
+                    else {
+                        userMovedIt = false
+                        starting = true
+                        SurfaceScope.launch {
+                            val result = runCatching { host.startDesktop(Presentation.HIDDEN, timeoutMs = 10_000) }
+                            starting = false
+                            if (result.getOrNull() == null) startProblem = DesktopStartGuard.Blocker("The desktop did not start",
+                                result.exceptionOrNull()?.message?.takeIf { it.isNotBlank() }
+                                    ?: "The desktop did not finish starting within 10 seconds. Check Stellar or Shizuku Plus and try again.",
+                                emptyList())
+                        }
+                    }
+                }) { Text(if (starting) "Starting…" else DesktopPaneRules.START) }
             }
         }
     }

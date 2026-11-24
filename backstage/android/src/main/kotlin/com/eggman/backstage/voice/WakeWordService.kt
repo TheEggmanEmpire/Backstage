@@ -271,7 +271,7 @@ class WakeWordService : Service() {
                         // wake word listening while locked), and only for a desktop that can work while locked.
                         val desktopWhileLocked = locked && !s.wakePauseWhenLocked && runCatching {
                             com.eggman.backstage.agent.LockedDesktop.worksWhileLocked(
-                                AgentAccess.host(), com.eggman.backstage.data.Settings(this@WakeWordService).autoStartDesktop,
+                                AgentAccess.host(), com.eggman.backstage.data.Settings(this@WakeWordService).mayAutoStartDesktop,
                             )
                         }.getOrDefault(false)
                         if (locked && !VoiceCommand.allowedWhileLocked(command, desktopWhileLocked)) {

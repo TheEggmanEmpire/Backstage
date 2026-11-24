@@ -59,9 +59,11 @@ enum class Provider(
     CHATGPT(
         "ChatGPT (sign in)", "https://chatgpt.com/backend-api/codex", "gpt-6.1-terra",
         recommended = listOf(
+            ModelInfo("gpt-6.2-sol", "GPT-6.2 Sol", tools = true, vision = true, context = 400_000, note = "most capable"),
+            ModelInfo("gpt-6.2-astra", "GPT-6.2 Astra", tools = true, vision = true, context = 400_000),
             ModelInfo("gpt-6.1-terra", "GPT-6.1 Terra", default = true, tools = true, vision = true, context = 400_000, note = "balanced"),
             ModelInfo("gpt-6-luna", "GPT-6 Luna", tools = true, vision = true, context = 400_000, note = "faster, lighter on your limits"),
-            ModelInfo("gpt-6.1-sol", "GPT-6.1 Sol", tools = true, vision = true, context = 400_000, note = "most capable"),
+            ModelInfo("gpt-6.1-sol", "GPT-6.1 Sol", tools = true, vision = true, context = 400_000),
             ModelInfo("gpt-6-astra", "GPT-6 Astra", tools = true, vision = true, context = 400_000),
         ),
         keyHint = "Sign in with your ChatGPT account; usage counts against your plan's limits",

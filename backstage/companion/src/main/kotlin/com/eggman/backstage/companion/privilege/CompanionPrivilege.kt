@@ -11,13 +11,21 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
+import com.eggman.backstage.a11y.companion.CompanionProtocol
+import com.eggman.backstage.companion.CompanionRuntime
+import com.eggman.backstage.companion.omp.CompanionOmpRuntime
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.eggman.backstage.companion.R
+import com.eggman.backstage.privileged.PrivilegeProviders
+import com.google.android.material.button.MaterialButton
 import rikka.shizuku.Shizuku
 import com.eggman.backstage.privileged.IShellService
 import com.eggman.backstage.privileged.ShellUserService
@@ -27,6 +35,22 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import com.eggman.backstage.companion.BuildConfig
+
+internal enum class CompanionPermissionState(val label: Int) {
+    MISSING(R.string.companion_shizuku_missing),
+    STOPPED(R.string.companion_shizuku_stopped),
+    NEEDS_PERMISSION(R.string.companion_shizuku_needed),
+    GRANTED(R.string.companion_shizuku_granted);
+
+    companion object {
+        fun from(installed: Boolean, binderAlive: Boolean, granted: Boolean) = when {
+            binderAlive && granted -> GRANTED
+            binderAlive -> NEEDS_PERMISSION
+            installed -> STOPPED
+            else -> MISSING
+        }
+    }
+}
 
 /** Companion-local, explicitly approved Shizuku/Stellar shell operations. */
 object CompanionPrivilege {
@@ -49,6 +73,8 @@ object CompanionPrivilege {
         val owner: Any,
         val operation: String,
         val argument: String,
+        val timeoutMs: Long,
+        val script: CompanionSkillScript? = null,
         val createdAt: Long = System.currentTimeMillis(),
         @Volatile var state: State = State.PENDING,
         @Volatile var exitCode: Int? = null,
@@ -66,23 +92,41 @@ object CompanionPrivilege {
     @Volatile private var applicationContextRef: Context? = null
     @Volatile private var reviewButton: WeakReference<Button>? = null
     @Volatile private var statusText: WeakReference<TextView>? = null
+    private var grantButton: WeakReference<Button>? = null
+    private var queueStatus: WeakReference<TextView>? = null
+    private var permissionMessage: Int? = null
+    private var waitingForBinder = false
+    private var foreground = false
+    private val binderTimeout = Runnable { waitingForBinder = false; refreshUi() }
     @Volatile private var shell: IShellService? = null
     @Volatile private var binding: ServiceConnection? = null
 
-    private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, _ ->
-        if (requestCode == REQUEST_PERMISSION) main.post(::refreshUi)
+    private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, result ->
+        if (requestCode == REQUEST_PERMISSION) main.post {
+            permissionMessage = if (result == PackageManager.PERMISSION_GRANTED) null else R.string.companion_shizuku_denied
+            refreshUi()
+        }
     }
     private val binderDeadListener = Shizuku.OnBinderDeadListener { shell = null; refreshUi() }
-    private val binderReceivedListener = Shizuku.OnBinderReceivedListener { shell = null; refreshUi() }
+    private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
+        shell = null
+        main.post {
+            if (foreground && waitingForBinder && binderAlive()) {
+                cancelBinderWait()
+                requestShizukuPermission()
+            }
+            refreshUi()
+        }
+    }
     private val listenersInstalled = AtomicBoolean(false)
 
     /** Capability is advertised only while Shizuku is granted and an in-app or notification approval route is live. */
     @JvmStatic fun capabilities(context: Context): Int {
-        if (!shizukuGranted() || !shellIdentity()) return 0
+        if (!canUseShell()) return 0
         val activity = activityRef?.get()
         val foreground = activity != null && !activity.isFinishing && !activity.isDestroyed && activity.hasWindowFocus()
         if (!foreground && !notificationsEnabled(context)) return 0
-        return CAP_SHELL or CAP_PACKAGES
+        return CAP_SHELL or CAP_PACKAGES or CompanionProtocol.CAP_SKILL_SCRIPTS
     }
 
     /** start queues for explicit approval; poll reads only the authenticated owner's result; cancel drops pending work. */
@@ -108,52 +152,114 @@ object CompanionPrivilege {
         refreshUi()
     }
 
-    /** Add setup and a human-operated review queue to the existing launcher screen. */
-    @JvmStatic fun attach(activity: Activity, content: LinearLayout) {
-        installListeners()
+    /** Connect the permission card and the local request approval controls. */
+    fun attach(activity: Activity, status: TextView, grant: Button, more: LinearLayout) {
         ensureNotificationChannel(activity)
         activityRef = WeakReference(activity)
         applicationContextRef = activity.applicationContext
-        content.addView(TextView(activity).apply {
-            text = "Privileged local administration (Shizuku / Stellar)"
-            textSize = 20f
-            setPadding(0, 20, 0, 6)
+        statusText = WeakReference(status)
+        grantButton = WeakReference(grant)
+        grant.setOnClickListener { grantPermission(activity) }
+        more.addView(MaterialButton(activity).apply {
+            setText(R.string.companion_open_shizuku_manager)
+            visibility = if (installedManager(activity) == null) android.view.View.GONE else android.view.View.VISIBLE
+            setOnClickListener { installedManager(activity)?.let { openManager(activity, it) } }
         })
-        content.addView(TextView(activity).apply {
-            text = "Shell commands and package changes wait for a separate approval here. Each approval runs once with a 15-second deadline and bounded output. This does not enable accessibility or expose screen content."
-            setPadding(0, 4, 0, 10)
-        })
-        statusText = WeakReference(TextView(activity).also { content.addView(it) })
-        content.addView(Button(activity).apply {
-            text = "Grant Shizuku permission"
+        more.addView(TextView(activity).apply { setText(R.string.companion_approval_queue) })
+        queueStatus = WeakReference(TextView(activity).also(more::addView))
+        more.addView(MaterialButton(activity).apply {
+            setText(R.string.companion_approval_notifications)
             setOnClickListener {
-                if (!binderAlive()) setStatus("Start Shizuku or Stellar with Shizuku compatibility enabled, then return here.")
-                else if (!shizukuGranted()) runCatching { Shizuku.requestPermission(REQUEST_PERMISSION) }
-                else setStatus("Shizuku permission is already granted.")
-            }
-        })
-        content.addView(Button(activity).apply {
-            text = "Enable approval notifications"
-            setOnClickListener {
-                if (notificationsEnabled(activity)) setStatus("Approval notifications are enabled.")
+                if (notificationsEnabled(activity)) setStatus(activity.getString(R.string.companion_approval_notifications_enabled))
                 else activity.requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), REQUEST_PERMISSION + 1)
             }
         })
-        reviewButton = WeakReference(Button(activity).apply {
+        reviewButton = WeakReference(MaterialButton(activity).apply {
             text = "Review privileged request"
             setOnClickListener { reviewNext(activity) }
-            content.addView(this)
+            more.addView(this)
         })
+        installListeners()
         refreshUi()
+    }
+
+    fun onResume(activity: Activity) {
+        if (activityRef?.get() !== activity) return
+        foreground = true
+        if (!binderAlive() && installedManager(activity) == PrivilegeProviders.STELLAR_PACKAGE) requestStellarBinder(activity)
+        refreshUi()
+    }
+
+    fun onPause(activity: Activity) {
+        if (activityRef?.get() !== activity) return
+        foreground = false
+        cancelBinderWait()
+    }
+
+    private fun installedManager(context: Context): String? = PrivilegeProviders.packages.firstOrNull {
+        runCatching { context.packageManager.getPackageInfo(it, PackageManager.PackageInfoFlags.of(0)) }.isSuccess
+    }
+
+    private fun grantPermission(activity: Activity) {
+        permissionMessage = null
+        if (binderAlive()) requestShizukuPermission()
+        else when (val manager = installedManager(activity)) {
+            PrivilegeProviders.STELLAR_PACKAGE -> {
+                waitingForBinder = true
+                main.removeCallbacks(binderTimeout)
+                main.postDelayed(binderTimeout, 4_000)
+                if (requestStellarBinder(activity).isFailure) {
+                    cancelBinderWait()
+                    permissionMessage = R.string.companion_shizuku_failed
+                }
+            }
+            null -> Unit
+            else -> openManager(activity, manager)
+        }
+        refreshUi()
+    }
+
+    private fun requestStellarBinder(context: Context) = runCatching {
+        context.sendBroadcast(Intent(PrivilegeProviders.STELLAR_REQUEST_BINDER).setPackage(PrivilegeProviders.STELLAR_PACKAGE))
+    }
+
+    private fun openManager(activity: Activity, manager: String) {
+        activity.packageManager.getLaunchIntentForPackage(manager)?.let { intent ->
+            runCatching { activity.startActivity(intent) }
+        }
+    }
+
+    private fun cancelBinderWait() {
+        waitingForBinder = false
+        main.removeCallbacks(binderTimeout)
+    }
+
+    private fun requestShizukuPermission() {
+        if (shizukuGranted()) return
+        runCatching {
+            if (Shizuku.shouldShowRequestPermissionRationale()) permissionMessage = R.string.companion_shizuku_denied
+            else Shizuku.requestPermission(REQUEST_PERMISSION)
+        }.onFailure {
+            Log.w("CompanionPrivilege", "Shizuku permission request failed", it)
+            permissionMessage = R.string.companion_shizuku_failed
+        }
     }
 
     private fun start(context: Context, owner: Any, id: String, request: Bundle): Bundle {
         if (!shizukuGranted()) return failed(id, "Grant Shizuku permission in the companion before requesting privileged operations.")
         val operation = request.getString("operation").orEmpty()
         val rawArgument = request.getString("argument").orEmpty()
+        val script = if (operation == "skill_script") try {
+            CompanionSkillScript.from(request)
+        } catch (_: Exception) {
+            return failed(id, "Invalid skill archive, script path or arguments.")
+        } else null
         val validation = validateRequest(operation, rawArgument)
         if (validation != null) return failed(id, validation)
         val argument = rawArgument
+        val timeoutMs = if (operation == "shell" || script != null) {
+            request.getInt("timeoutSeconds", 15).coerceIn(5, 300) * 1000L
+        } else COMMAND_TIMEOUT_MS
         if (!shellIdentity()) return failed(id, "Privileged execution requires Shizuku shell identity (uid 2000). Root identity is not allowed.")
         synchronized(lock) {
             trimResults()
@@ -161,7 +267,7 @@ object CompanionPrivilege {
             val pendingCount = requests.values.count { it.state in setOf(State.PENDING, State.APPROVED, State.RUNNING) }
             if (pendingCount >= 8) return failed(id, "Too many privileged requests are already pending or running.")
             if (capabilities(context) == 0) return failed(id, "Open the companion and enable notifications before requesting privileged operations.")
-            requests[id] = Result(id, owner, operation, argument)
+            requests[id] = Result(id, owner, operation, argument, timeoutMs, script)
         }
         updateNotification(context)
         refreshUi()
@@ -196,12 +302,18 @@ object CompanionPrivilege {
         }
         val keyguard = activity.getSystemService(KeyguardManager::class.java)
         if (keyguard?.isKeyguardLocked == true || !activity.hasWindowFocus()) {
-            setStatus("Unlock the device and bring Backstage Agent to the foreground to review this request.")
+            setStatus("Unlock the device and bring Backstage-play-agent to the foreground to review this request.")
             return
         }
-        val verb = when (next.operation) { "shell" -> "Run shell command"; "install" -> "Install package"; else -> "Uninstall package" }
+        val verb = when (next.operation) {
+            "shell" -> "Run shell command"
+            "skill_script" -> "Run skill script"
+            "install" -> "Install package"
+            else -> "Uninstall package"
+        }
         val body = when (next.operation) {
             "shell" -> next.argument
+            "skill_script" -> "${next.argument}/${requireNotNull(next.script).approvalText()}"
             "install" -> "Install APK from:\n${next.argument}"
             else -> "Uninstall package:\n${next.argument}"
         }
@@ -221,14 +333,23 @@ object CompanionPrivilege {
         refreshUi()
         io.execute {
             var executionDispatched = false
+            var scriptStage: String? = null
             try {
                 validateRequest(result.operation, result.argument)?.let { throw IllegalArgumentException(it) }
                 if (!shellIdentity()) throw IllegalStateException("Shizuku shell identity (uid 2000) is unavailable; root identity is not allowed.")
                 val service = awaitShellService(context)
                 val argv = when (result.operation) {
-                    "shell" -> arrayOf("sh", "-c", result.argument)
-                    "install" -> arrayOf("pm", "install", "-r", "--user", "0", result.argument)
-                    "uninstall" -> arrayOf("pm", "uninstall", "--user", "0", result.argument)
+                    "shell" -> listOf("sh", "-c", result.argument)
+                    "skill_script" -> requireNotNull(result.script).let { script ->
+                        val stage = "/data/local/tmp/backstage-agent-skill-${UUID.randomUUID()}"
+                        val command = script.argv(stage)
+                        scriptStage = stage
+                        if (script.interpreter == "sh") command
+                        else CompanionOmpRuntime.skillArgv(context, command)
+                            ?: error("Install the companion OMP runtime before running ${script.interpreter} scripts")
+                    }
+                    "install" -> listOf("pm", "install", "-r", "--user", "0", result.argument)
+                    "uninstall" -> listOf("pm", "uninstall", "--user", "0", result.argument)
                     else -> error("Invalid operation")
                 }
                 synchronized(lock) {
@@ -237,11 +358,7 @@ object CompanionPrivilege {
                 }
                 // Once Binder exec is entered, any transport failure is ambiguous. Never invoke it again.
                 executionDispatched = true
-                val raw = service.exec(argv, COMMAND_TIMEOUT_MS)
-                val code = raw.substringBefore('\n').trim().toIntOrNull() ?: 127
-                val rest = raw.substringAfter('\n', "")
-                val out = rest.substringBefore("\n\u0000")
-                val err = rest.substringAfter("\n\u0000", "")
+                val (code, out, err) = decodeShellResult(service.exec(argv.toTypedArray(), result.timeoutMs))
                 synchronized(lock) {
                     if (result.state == State.RUNNING) {
                         result.exitCode = code
@@ -262,9 +379,59 @@ object CompanionPrivilege {
                         }
                     }
                 }
-            } finally { refreshUi() }
+            } finally {
+                if (executionDispatched) scriptStage?.let { stage ->
+                    runCatching { runSystemCommand(context, listOf("rm", "-rf", stage), 5_000) }
+                }
+                refreshUi()
+            }
         }
     }
+
+    @JvmStatic internal fun canUseShell(): Boolean = shizukuGranted() && shellIdentity()
+
+    @JvmStatic internal fun runSystemCommand(context: Context, argv: List<String>, timeoutMs: Long): Triple<Int, String, String> {
+        if (!canUseShell()) return Triple(126, "", "Shizuku shell access is unavailable.")
+        return decodeShellResult(awaitShellService(context).exec(argv.toTypedArray(), timeoutMs))
+    }
+
+    private fun decodeShellResult(raw: String): Triple<Int, String, String> {
+        val code = raw.substringBefore('\n').trim().toIntOrNull() ?: 127
+        val body = raw.substringAfter('\n', "")
+        return Triple(code, body.substringBefore("\n\u0000"), body.substringAfter("\n\u0000", ""))
+    }
+
+    internal fun setOwnAccessibilityEnabled(context: Context, enabled: Boolean, onComplete: (Boolean) -> Unit) {
+        io.execute {
+            val success = runCatching {
+                synchronized(accessibilityLock) {
+                    check(!enabled || CompanionRuntime.consent(context))
+                    val key = android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                    val component = ComponentName(context.packageName, CompanionProtocol.ACCESSIBILITY_SERVICE)
+                    val (code, value) = runSystemCommand(context, listOf("settings", "get", "secure", key), 5_000)
+                    check(code == 0)
+                    val entries = value.trim().takeUnless { it == "null" }.orEmpty().split(':').filter(String::isNotBlank)
+                    val listed = entries.any { ComponentName.unflattenFromString(it) == component }
+                    check(!enabled || CompanionRuntime.consent(context))
+                    if (listed != enabled) {
+                        val next = if (enabled) entries + component.flattenToString()
+                        else entries.filterNot { ComponentName.unflattenFromString(it) == component }
+                        check(runSystemCommand(context, listOf("settings", "put", "secure", key, next.joinToString(":")), 5_000).first == 0)
+                    }
+                    if (enabled && android.provider.Settings.Secure.getInt(
+                            context.contentResolver, android.provider.Settings.Secure.ACCESSIBILITY_ENABLED, 0,
+                        ) != 1) {
+                        check(CompanionRuntime.consent(context))
+                        check(runSystemCommand(context, listOf("settings", "put", "secure", android.provider.Settings.Secure.ACCESSIBILITY_ENABLED, "1"), 5_000).first == 0)
+                    }
+                    true
+                }
+            }.getOrDefault(false)
+            onComplete(success)
+        }
+    }
+
+    private val accessibilityLock = Any()
 
     private fun awaitShellService(context: Context): IShellService {
         shell?.takeIf { runCatching { it.asBinder().isBinderAlive }.getOrDefault(false) }?.let { return it }
@@ -320,8 +487,9 @@ object CompanionPrivilege {
                 else -> null
             }
         }
+        "skill_script" -> if (!Regex("[\\p{L}\\p{N}][\\p{L}\\p{N}-]{0,63}").matches(argument)) "Invalid skill name." else null
         "uninstall" -> if (argument.length > MAX_ARG_CHARS || !PACKAGE_ID.matches(argument)) "Uninstall requires a strict Android package ID." else null
-        else -> "Operation must be shell, install, or uninstall."
+        else -> "Unsupported privileged operation."
     }
 
     internal fun forbiddenShell(command: String): Boolean {
@@ -376,20 +544,26 @@ object CompanionPrivilege {
     private fun refreshUi() {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post(::refreshUi); return }
         val pending = synchronized(lock) { requests.values.count { it.state == State.PENDING } }
-        val granted = shizukuGranted()
-        statusText?.get()?.text = when {
-            !binderAlive() -> "Status: start Shizuku or Stellar (with Shizuku compatibility) to continue."
-            !granted -> "Status: Shizuku permission not granted."
-            pending > 0 -> "Status: $pending request(s) waiting for your approval."
-            else -> "Status: ready. Each operation requires approval here."
+        val alive = binderAlive()
+        val granted = alive && shizukuGranted()
+        statusText?.get()?.let { status ->
+            val state = CompanionPermissionState.from(installedManager(status.context) != null, alive, granted)
+            status.setText(when {
+                waitingForBinder -> R.string.companion_shizuku_waiting
+                state == CompanionPermissionState.GRANTED -> state.label
+                else -> permissionMessage ?: state.label
+            })
+            grantButton?.get()?.isEnabled = !waitingForBinder && state != CompanionPermissionState.GRANTED &&
+                state != CompanionPermissionState.MISSING
         }
-        reviewButton?.get()?.apply { text = if (pending == 0) "Review privileged request (none waiting)" else "Review privileged request ($pending waiting)"; isEnabled = pending > 0 && granted }
+        queueStatus?.get()?.apply { text = resources.getQuantityString(R.plurals.companion_requests_waiting, pending, pending) }
+        reviewButton?.get()?.isEnabled = pending > 0 && granted
         applicationContextRef?.let(::updateNotification)
     }
 
     private fun setStatus(text: String) {
-        if (Looper.myLooper() == Looper.getMainLooper()) statusText?.get()?.text = text
-        else main.post { statusText?.get()?.text = text }
+        if (Looper.myLooper() == Looper.getMainLooper()) queueStatus?.get()?.text = text
+        else main.post { queueStatus?.get()?.text = text }
     }
 
     private fun trimResults() {
@@ -405,7 +579,7 @@ object CompanionPrivilege {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         if (manager.getNotificationChannel(CHANNEL_ID) == null) {
             manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Privileged request approvals", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                description = "A private reminder to review local device administration requests in Backstage Agent."
+                description = "A private reminder to review local device administration requests in Backstage-play-agent."
                 lockscreenVisibility = Notification.VISIBILITY_PRIVATE
             })
         }
@@ -430,7 +604,7 @@ object CompanionPrivilege {
         val contentIntent = PendingIntent.getActivity(context, NOTIFICATION_ID, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         manager.notify(NOTIFICATION_ID, Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("Backstage Agent")
+            .setContentTitle("Backstage-play-agent")
             .setContentText("A local device request is waiting for your review.")
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setOngoing(true)

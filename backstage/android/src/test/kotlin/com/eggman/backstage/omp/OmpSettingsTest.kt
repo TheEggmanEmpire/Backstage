@@ -1,6 +1,5 @@
 package com.eggman.backstage.omp
 
-import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import com.eggman.backstage.data.MemoryStore
 import com.eggman.backstage.data.SecretCipher
 import com.eggman.backstage.data.SettingsBackup
@@ -25,7 +24,7 @@ class OmpSettingsTest {
         assertEquals(47821, ui.ompBrokerPort)
         ui.ompEnabled = true; ui.ompAutoApprove = true; ui.ompTermuxEnabled = true
         ui.ompBrokerPort = 1
-        assertEquals(!PLAY_DISTRIBUTION, s.ompEnabled)
+        assertTrue(s.ompEnabled)
         assertTrue(s.ompAutoApprove && s.ompTermuxEnabled)
         assertEquals(1024, s.ompBrokerPort)
         ui.termuxShellEnabled = true; ui.termuxShellAutoApprove = true

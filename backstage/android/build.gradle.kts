@@ -37,6 +37,7 @@ android {
             buildConfigField("String", "PLAY_REPORT_ENDPOINT", "\"$reportEndpoint\"")
         }
     }
+    sourceSets["main"].aidl.srcDir("../privileged-aidl")
     sourceSets["play"].apply {
         java.srcDir("../companion-protocol/kotlin")
         aidl.srcDir("../companion-protocol/aidl")

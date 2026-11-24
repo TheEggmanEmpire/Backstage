@@ -95,7 +95,7 @@ class AndroidAgentEnvironment(private val context: Context) : AgentEnvironment {
             hostPresent = host != null,
             desktopActive = runCatching { host?.sessionActive() == true }.getOrDefault(false),
             privilegedAvailable = privileged(),
-            autoStartDesktop = settings.autoStartDesktop,
+            autoStartDesktop = settings.mayAutoStartDesktop,
             conversationTarget = conversationTarget,
             externalPhoneAllowed = settings.externalPhoneControl,
         )
@@ -122,6 +122,7 @@ class AndroidAgentEnvironment(private val context: Context) : AgentEnvironment {
             !PhoneScreen.on(context)
 
     private suspend fun desktopExecutor(): Executor {
+        check(settings.onboardingDone) { "Finish Backstage setup before starting the desktop." }
         val host = DesktopHosts.current ?: throw IllegalStateException("This build has no Dextop desktop; use the phone screen.")
         val extras = host as? com.eggman.backstage.host.DesktopHostExtras
         val locked = phoneLocked()
@@ -134,7 +135,7 @@ class AndroidAgentEnvironment(private val context: Context) : AgentEnvironment {
             optedIn = runCatching { extras?.runWhileLocked() == true }.getOrDefault(false),
             createdWithOptIn = status?.createdWithOptIn,
             hostFallback = status?.hostFallback,
-            startable = settings.autoStartDesktop && privileged(),
+            startable = settings.mayAutoStartDesktop && privileged(),
             restartTriedRecently = LockedModeLog.restartTriedRecently(),
         )
         var geo: com.eggman.backstage.host.DesktopHost.Geometry? = null
@@ -217,10 +218,10 @@ class AndroidAgentEnvironment(private val context: Context) : AgentEnvironment {
             sdkInt = Build.VERSION.SDK_INT,
             appLabel = runCatching { context.applicationInfo.loadLabel(context.packageManager).toString() }.getOrDefault("Backstage"),
             desktopRunsWhileLocked = active && runCatching { extras?.desktopRunsWhileLocked() == true }.getOrDefault(false),
-            desktopStartableWhileLocked = !active && host != null && settings.autoStartDesktop && privileged &&
+            desktopStartableWhileLocked = !active && host != null && settings.mayAutoStartDesktop && privileged &&
                 runCatching { extras?.runWhileLocked() == true }.getOrDefault(false),
             // Created before the opt-in: a task started while locked restarts it with the flags (DesktopLockGate).
-            desktopRestartableWhileLocked = active && settings.autoStartDesktop && privileged &&
+            desktopRestartableWhileLocked = active && settings.mayAutoStartDesktop && privileged &&
                 runCatching { extras?.runWhileLocked() == true }.getOrDefault(false) &&
                 runCatching { extras?.lockedModeStatus()?.createdWithOptIn == false }.getOrDefault(false) &&
                 !LockedModeLog.restartTriedRecently(),
@@ -243,14 +244,35 @@ class AndroidAgentEnvironment(private val context: Context) : AgentEnvironment {
         val target = runCatching { com.eggman.backstage.exec.TargetResolver.resolve(targetContext(request, null)).kind }.getOrNull()
         // an automation starts on a freshly restarted desktop, so nothing left on screen by earlier work misleads it.
         val host = DesktopHosts.current
+        var restarted = false
         if (target == TargetKind.DESKTOP && host != null &&
             DesktopRefresh.wantedFor(request, settings.freshDesktopForAutomation, runCatching { host.sessionActive() }.getOrDefault(false))) {
             desktop = null
-            if (services.restartDesktop() == null) LockedModeLog.record("could not restart the desktop before an automation")
+            restarted = services.restartDesktop() != null
+            if (!restarted) LockedModeLog.record("could not restart the desktop before an automation")
+        }
+        // A desktop that runs but shows only black cannot be operated: restart it before the task starts. A second
+        // frame confirms the first, so a desktop caught mid-transition is left alone.
+        if (target == TargetKind.DESKTOP && host != null && !restarted && desktopBlank(host)) {
+            delay(1_500)
+            if (desktopBlank(host)) {
+                desktop = null
+                if (services.restartDesktop() == null) LockedModeLog.record("the desktop showed only black and did not come back after a restart")
+                else LockedModeLog.record("the desktop showed only black; restarted it before the task")
+            }
         }
         // A desktop that keeps running while locked (or will be started/restarted that way) needs no phone screen:
         // leave the phone dark and locked.
         if (ReadinessCheck.needsPhoneScreen(readinessInputs(), target)) wakeIfNeeded()
+    }
+
+    /** One frame of the running desktop is black throughout (same capture path as the desktop executor). */
+    private suspend fun desktopBlank(host: com.eggman.backstage.host.DesktopHost): Boolean {
+        val displayId = runCatching { host.geometry()?.displayId }.getOrNull() ?: return false
+        return DesktopHealth.blank(host) {
+            (if (PLAY_DISTRIBUTION) null else runCatching { host.captureFrame() }.getOrNull())
+                ?: AgentAccessibility.instance?.screenshot(displayId)
+        }
     }
 
     /**

@@ -158,8 +158,8 @@ class UiLogicTest {
         val claude = ProviderOptions.byId("ANTHROPIC")!!
         assertEquals(1, ProviderOptions.validate(claude, "", "m", "https://a").size)
         assertTrue(ProviderOptions.validate(claude, "k", "m", "https://a").isEmpty())
-        assertEquals(1, ProviderOptions.validate(claude, "k", "m", "http://api.example.com").size)
-        val localEndpointErrors = if (PLAY_DISTRIBUTION) listOf("Enter an HTTPS endpoint.") else emptyList()
+        assertEquals(if (PLAY_DISTRIBUTION) 0 else 1, ProviderOptions.validate(claude, "k", "m", "http://api.example.com").size)
+        val localEndpointErrors = emptyList<String>()
         assertEquals(localEndpointErrors, ProviderOptions.validate(claude, "k", "m", "http://192.168.1.5:8080/v1"))
         assertEquals(1, ProviderOptions.validate(claude, "k", "m", "ftp://x").size)
         val ollama = ProviderOptions.byId("OLLAMA")!!

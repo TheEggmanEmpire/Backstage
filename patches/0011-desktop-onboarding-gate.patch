@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Backstage <backstage@localhost>
+Date: Sun, 22 Nov 2026 16:30:00 +0900
+Subject: [PATCH] desktop-onboarding-gate
+
+Require Backstage setup before starting a desktop session.
+
+---
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/MirrorService.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/MirrorService.kt
+index db5fbe79a1ab479af6c86d4b2f25897b8945ab7f..4c4dafb5a2d3a8960482d98854fff19cdbcbe4d4 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/MirrorService.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/MirrorService.kt
+@@ -2271,6 +2271,10 @@
+             forceFreeform: Boolean = false,
+             completion: (Result<Map<String, Any>>) -> Unit
+         ) {
++            if (!com.eggman.backstage.ui.settings.SettingsStores.get(context).onboardingDone) {
++                completion(Result.failure(IllegalStateException("Finish Backstage setup before starting the desktop.")))
++                return
++            }
+             val running = instance
+             if (running?.stopping == true) {
+                 completion(Result.failure(IllegalStateException("Dextop is still finishing its previous session")))
+diff --git a/lib/backstage_shell.dart b/lib/backstage_shell.dart
+index cfe4af5b313765c0ed5c30dd031a4c113cdea4d1..0ad52e41c06f9095c72b2b62b5bd66b716636590 100644
+--- a/lib/backstage_shell.dart
++++ b/lib/backstage_shell.dart
+@@ -202,6 +202,7 @@
+   bool get visible => foreground && BackstageShellBridge.homeVisible.value;
+ 
+   bool available = false;
++  bool onboardingDone = false;
+   bool running = false;
+   bool starting = false;
+   bool privileged = false;
+@@ -317,6 +318,7 @@
+     final nowHeight = (state['height'] as num?)?.toInt() ?? 0;
+     setState(() {
+       available = state['playerAllowed'] == true;
++      onboardingDone = state['onboardingDone'] == true;
+       privileged = state['privileged'] == true;
+       running = nowRunning;
+       presentation = state['presentation'] as String? ?? 'none';
+@@ -325,8 +327,15 @@
+       if (running) starting = false;
+     });
+     BackstageShellBridge.startBackground.value =
+-        available && privileged && !running ? start : null;
++        available && onboardingDone && privileged && !running ? start : null;
+     if (!available) return;
++    if (onboardingDone && visible) {
++      WidgetsBinding.instance.addPostFrameCallback((_) {
++        if (mounted && visible) {
++          unawaited(BackstageShellBridge.invoke<void>('homeShown'));
++        }
++      });
++    }
+     if (autoSwitched && presentation != 'in_app') autoSwitched = false;
+     if (running) await syncPreview();
+     if (!mounted || !visible) return;
+@@ -435,6 +444,15 @@
+   @override
+   Widget build(BuildContext context) {
+     if (!available) return const SizedBox.shrink();
++    if (!onboardingDone) {
++      return Padding(
++        padding: const EdgeInsets.only(bottom: 16),
++        child: OutlinedButton(
++          onPressed: () => BackstageShellBridge.openAgent(),
++          child: const Text('Finish Backstage setup'),
++        ),
++      );
++    }
+     // Not running: Home's Start button (below) starts either desktop; this card only shows progress or setup.
+     if (!PlayDesktopStart.enabled && !running && !starting && privileged)
+       return const SizedBox.shrink();
+diff --git a/test/backstage_shell_test.dart b/test/backstage_shell_test.dart
+index 5407ed21ba34666c0a1f28388de37ed1a2716e1e..abf9b3e98ced9d38f4babca438e78534d57a3324 100644
+--- a/test/backstage_shell_test.dart
++++ b/test/backstage_shell_test.dart
+@@ -25,6 +25,7 @@
+     previewOwned = false;
+     shellState = {
+       'playerAllowed': true,
++      'onboardingDone': true,
+       'running': false,
+       'presentation': 'none',
+       'width': 0,
+@@ -74,6 +75,8 @@
+           return true;
+         case 'state':
+           return shellState;
++        case 'homeShown':
++          return null;
+         case 'playerAttach':
+           return {'textureId': 7, 'width': 1920, 'height': 1080};
+       }
+@@ -119,6 +122,23 @@
+       tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+       3,
+     );
++    await tester.pumpWidget(const SizedBox());
++  });
++
++  testWidgets('Home reports visibility for desktop startup after setup', (
++    tester,
++  ) async {
++    shellState['onboardingDone'] = false;
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    expect(find.text('Finish Backstage setup'), findsOneWidget);
++    expect(shellCalls.where((c) => c.method == 'homeShown'), isEmpty);
++
++    shellState['onboardingDone'] = true;
++    await tester.pump(const Duration(seconds: 2));
++    await settle(tester);
++    expect(find.text('Finish Backstage setup'), findsNothing);
++    expect(shellCalls.where((c) => c.method == 'homeShown'), isNotEmpty);
+     await tester.pumpWidget(const SizedBox());
+   });
+ 

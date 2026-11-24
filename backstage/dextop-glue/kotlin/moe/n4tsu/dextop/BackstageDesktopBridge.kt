@@ -38,6 +38,7 @@ import com.eggman.backstage.host.DesktopTyping
 import com.eggman.backstage.host.FrameHandoff
 import com.eggman.backstage.host.LockedModeStatus
 import com.eggman.backstage.host.PresentationNames
+import com.eggman.backstage.host.desktopStartPresentationReached
 import com.eggman.backstage.host.Reconnecting
 import com.eggman.backstage.host.ShellPayloads
 import java.util.concurrent.CopyOnWriteArrayList
@@ -320,16 +321,33 @@ object BackstageDesktopBridge : DesktopHost, DesktopHostExtras {
 
     override fun directDisplay(): Boolean = MirrorService.Backstage.isDirectDisplay()
 
-    override suspend fun startDesktop(presentation: DesktopHost.Presentation, timeoutMs: Long): DesktopHost.Geometry? {
+    override suspend fun startDesktop(presentation: DesktopHost.Presentation, timeoutMs: Long): DesktopHost.Geometry? =
+        startDesktop(presentation, timeoutMs, reportFailure = null)
+
+    internal suspend fun startDesktop(
+        presentation: DesktopHost.Presentation,
+        timeoutMs: Long,
+        reportFailure: ((String) -> Unit)?,
+    ): DesktopHost.Geometry? {
+        val context = appContext ?: return null
+        if (!com.eggman.backstage.ui.settings.SettingsStores.get(context).onboardingDone) {
+            reportFailure?.invoke("Finish Backstage setup before starting the desktop.")
+            return null
+        }
         geometry()?.let { current ->
             if (presentation != DesktopHost.Presentation.NONE && this.presentation() != presentation) {
                 setPresentationAwait(presentation)
             }
             return current
         }
-        val context = appContext ?: return null
         if (MirrorService.isAutoOnlySessionActive()) return null
-        if (!privileged()) awaitPrivilege(minOf(timeoutMs, 10_000L))
+        if (!privileged()) {
+            if (reportFailure != null) {
+                reportFailure("Stellar or Shizuku Plus disconnected before the desktop could start.")
+                return null
+            }
+            awaitPrivilege(minOf(timeoutMs, 10_000L))
+        }
         val wanted = presentation.takeUnless { it == DesktopHost.Presentation.NONE } ?: DesktopHost.Presentation.FULL
         MirrorService.Backstage.requestPresentationOnStart(PresentationNames.wireName(wanted))
         val failed = AtomicReference<String?>(null)
@@ -342,6 +360,7 @@ object BackstageDesktopBridge : DesktopHost, DesktopHostExtras {
             else launchHeadless(context) { error -> failed.set(error) }
         if (!launched) {
             MirrorService.Backstage.requestPresentationOnStart(null)
+            reportFailure?.invoke(failed.get() ?: "The desktop could not start with the saved display profile.")
             return null
         }
         val started = withTimeoutOrNull(timeoutMs.coerceAtLeast(1_000L)) {
@@ -356,13 +375,16 @@ object BackstageDesktopBridge : DesktopHost, DesktopHostExtras {
         if (started == null) {
             MirrorService.Backstage.requestPresentationOnStart(null)
             Log.w(TAG, "desktop did not start within ${timeoutMs}ms")
+            failed.get()?.let { reportFailure?.invoke(it) }
             return null
         }
         if (wanted != DesktopHost.Presentation.FULL) {
             // The pending presentation is applied shortly after the display attaches.
-            withTimeoutOrNull(PRESENTATION_WAIT_MS) {
-                while (this@BackstageDesktopBridge.presentation() != wanted) delay(100L)
-            } ?: setPresentationAwait(wanted)
+            val presented = withTimeoutOrNull(PRESENTATION_WAIT_MS) {
+                while (!desktopStartPresentationReached(wanted, this@BackstageDesktopBridge.presentation())) delay(100L)
+                true
+            } ?: desktopStartPresentationReached(wanted, this@BackstageDesktopBridge.presentation())
+            if (!presented) setPresentationAwait(wanted)
         }
         return geometry() ?: started
     }

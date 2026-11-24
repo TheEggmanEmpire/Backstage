@@ -20,7 +20,7 @@ class OmpConfigTest {
             setDetectedCapability(Provider.CUSTOM, "other", "vision", true)
             setApiKey(Provider.OPENAI, "synthetic-builtin-secret")
             setModel(Provider.OPENAI, "gpt-main")
-            setEnabledModels(Provider.OPENAI, setOf("gpt-other"))
+            setEnabledModels(Provider.OPENAI, setOf("gpt-main", "gpt-other"))
         }
         val files = OmpConfig.from(settings)
         assertTrue(files.config.startsWith("modelRoles:\n  default: \"backstage-custom/main\"\n"))
@@ -33,6 +33,13 @@ class OmpConfigTest {
         assertFalse(files.models.contains("      - id: \"gpt-other\""))
         assertFalse((files.models + files.config).contains("synthetic-secret"))
     }
+    @Test fun noActiveModelOmitsTheDefaultSelector() {
+        val settings = Settings(MemoryStore()).apply { setEnabledModels(provider, emptySet()) }
+        val files = OmpConfig.from(settings)
+        assertFalse(files.config.contains("modelRoles:"))
+        assertFalse(files.config.contains("/${settings.provider.defaultModel}\""))
+    }
+
     private fun mcpFiles(servers: List<RemoteMcpServer>) = OmpConfig.from(Settings(MemoryStore()).apply {
         remoteMcpServers = servers
     })

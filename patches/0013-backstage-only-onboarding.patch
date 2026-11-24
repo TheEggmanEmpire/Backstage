@@ -1,0 +1,146 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Backstage <backstage@localhost>
+Date: Sun, 22 Nov 2026 17:15:00 +0900
+Subject: [PATCH] backstage-only-onboarding
+
+Open Home for Backstage onboarding and migrate the desktop completion preference.
+
+---
+diff --git a/lib/app_shell.dart b/lib/app_shell.dart
+--- a/lib/app_shell.dart
++++ b/lib/app_shell.dart
+@@ -9,7 +9,7 @@
+ 
+ class _DextopAppState extends State<DextopApp> {
+   var themeMode = ThemeMode.system;
+-  bool? setupCompleted;
++  bool startupPreferencesLoaded = false;
+   bool? desktopWindow;
+ 
+   /// Shown on an external display (DeX, Dextop's desktop): a window with a title bar
+@@ -20,7 +20,7 @@
+   void initState() {
+     super.initState();
+     loadThemeMode();
+-    loadSetupState();
++    loadStartupPreferences();
+     loadLaunchContext();
+   }
+ 
+@@ -36,10 +36,10 @@
+     }
+   }
+ 
+-  Future<void> loadSetupState() async {
++  Future<void> loadStartupPreferences() async {
+     final preferences = await SharedPreferences.getInstance();
+-    final completed = preferences.getBool('setup_completed') ?? false;
+-    if (!completed) {
++    final desktopSetupCompleted = preferences.getBool('setup_completed') ?? false;
++    if (!desktopSetupCompleted) {
+       // Mark the current gesture guide as known as soon as a fresh 1.1.0+
+       // installation starts. Updated installations already have setup marked
+       // complete, so they remain eligible for the one-time migration guide.
+@@ -48,9 +48,12 @@
+         true,
+       );
+       await preferences.setString('last_launched_app_version', '1.1.0');
++      if (await BackstageShellBridge.invoke<bool>('onboardingDone') == true) {
++        await preferences.setBool('setup_completed', true);
++      }
+     }
+     if (mounted) {
+-      setState(() => setupCompleted = completed);
++      setState(() => startupPreferencesLoaded = true);
+     }
+   }
+ 
+@@ -94,12 +97,8 @@
+         linuxMaterialUiLocalizations,
+       ],
+       supportedLocales: AppLocalizations.supportedLocales,
+-      home: setupCompleted == null || desktopWindow == null
++      home: !startupPreferencesLoaded || desktopWindow == null
+           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+-          : setupCompleted == false
+-          ? DextopSetupPage(
+-              onCompleted: () => setState(() => setupCompleted = true),
+-            )
+           : HomeScreen(
+               themeMode: themeMode,
+               onThemeModeChanged: setThemeMode,
+diff --git a/lib/main.dart b/lib/main.dart
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -15,7 +15,6 @@
+ import 'package:free_dextop/linux_page.dart';
+ import 'package:free_dextop/linux/linux_expressive.dart';
+ import 'package:free_dextop/penguin_icon.dart';
+-import 'package:free_dextop/setup_page.dart';
+ import 'package:free_dextop/embedded_binder_setup.dart';
+ import 'package:shared_preferences/shared_preferences.dart';
+ import 'package:archive/archive.dart';
+diff --git a/test/backstage_shell_test.dart b/test/backstage_shell_test.dart
+--- a/test/backstage_shell_test.dart
++++ b/test/backstage_shell_test.dart
+@@ -2,6 +2,7 @@
+ import 'package:flutter/services.dart';
+ import 'package:flutter_test/flutter_test.dart';
+ import 'package:free_dextop/main.dart';
++import 'package:free_dextop/setup_page.dart';
+ import 'package:shared_preferences/shared_preferences.dart';
+ 
+ // Backstage (patch 0005-backstage-shell): the Agent destination and the live desktop player on Home.
+@@ -85,6 +86,8 @@
+             'height': 1080,
+           });
+           return true;
++        case 'onboardingDone':
++          return shellState['onboardingDone'];
+         case 'homeShown':
+           return null;
+         case 'playerAttach':
+@@ -132,6 +135,31 @@
+       tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+       3,
+     );
++    await tester.pumpWidget(const SizedBox());
++  });
++
++  testWidgets('fresh installs use Backstage setup from Home', (tester) async {
++    SharedPreferences.setMockInitialValues({});
++    shellState['onboardingDone'] = false;
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    expect(find.byType(DextopSetupPage), findsNothing);
++    expect(find.text('Finish Backstage setup'), findsOneWidget);
++    final preferences = await SharedPreferences.getInstance();
++    expect(preferences.getBool('setup_completed'), isNot(true));
++    await tester.pumpWidget(const SizedBox());
++  });
++
++  testWidgets('completed Backstage setup migrates the desktop preference', (
++    tester,
++  ) async {
++    SharedPreferences.setMockInitialValues({});
++    await tester.pumpWidget(const DextopApp());
++    await settle(tester);
++    expect(find.byType(DextopSetupPage), findsNothing);
++    expect(find.text('Finish Backstage setup'), findsNothing);
++    final preferences = await SharedPreferences.getInstance();
++    expect(preferences.getBool('setup_completed'), isTrue);
+     await tester.pumpWidget(const SizedBox());
+   });
+ 
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLauncherActivity.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLauncherActivity.kt
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLauncherActivity.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/DextopLauncherActivity.kt
+@@ -11,7 +11,7 @@
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
+         val launchDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
+-        if (BuildConfig.DISTRIBUTION_CHANNEL == "play" && launchDisplayId == Display.DEFAULT_DISPLAY &&
++        if (launchDisplayId == Display.DEFAULT_DISPLAY &&
+             intent.action == Intent.ACTION_MAIN &&
+             intent.hasCategory(Intent.CATEGORY_LAUNCHER) &&
+             !com.eggman.backstage.ui.settings.SettingsStores.get(this).onboardingDone) {

@@ -2,7 +2,7 @@
 set -eu
 umask 077
 ROOT=${1:?ROOT}; LIBDIR=${2:?LIBDIR}; ACTION=${3:?ACTION}; ID=${4:?ID}
-case "$ROOT" in /data/local/tmp/backstage-omp) ;; *) exit 2;; esac
+case "$ROOT" in /data/local/tmp/backstage-omp|/data/local/tmp/backstage-agent-omp) ;; *) exit 2;; esac
 case "$ID" in ''|*[!a-z0-9]*) echo 'Invalid job id' >&2; exit 2;; esac
 [ ${#ID} -ge 8 ] && [ ${#ID} -le 32 ] || exit 2
 DIR=$ROOT/jobs/$ID

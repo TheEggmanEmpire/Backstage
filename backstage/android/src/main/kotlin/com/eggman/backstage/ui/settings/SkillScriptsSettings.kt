@@ -36,6 +36,8 @@ internal fun SkillScriptsSettingsSection(store: BackstageSettingsStore) {
         Text(if (!enabled) "Native skill script execution is disabled."
             else if (auto) "Auto runs scripts without asking. Shell access keeps its separate enablement and approval."
             else "Approve each script before it runs. Shell access may also ask for approval.", style = MaterialTheme.typography.bodySmall)
-        Text("Requires the installed OMP harness and privileged access. This runtime supports shell_user=true (uid 2000); app-user execution is unavailable. These controls govern the native run_skill_script tool; omp can run scripts directly.", style = MaterialTheme.typography.bodySmall)
+        Text(if (com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION) {
+            "Backstage-play-agent asks its owner before running a script as the shell user. JavaScript, TypeScript and Python need the companion’s OMP runtime and the corresponding interpreter."
+        } else "Requires the installed OMP harness and privileged access. This runtime supports shell_user=true (uid 2000); app-user execution is unavailable. These controls govern the native run_skill_script tool; omp can run scripts directly.", style = MaterialTheme.typography.bodySmall)
     }
 }

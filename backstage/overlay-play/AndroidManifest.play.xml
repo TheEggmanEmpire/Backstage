@@ -34,7 +34,7 @@
         android:icon="@mipmap/bs_ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/bs_ic_launcher"
-        android:usesCleartextTraffic="false"
+        android:usesCleartextTraffic="true"
         tools:replace="android:icon,android:label,android:usesCleartextTraffic,android:roundIcon">
 
         <activity

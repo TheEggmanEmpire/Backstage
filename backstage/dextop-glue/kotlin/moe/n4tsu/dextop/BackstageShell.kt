@@ -17,6 +17,7 @@ import com.eggman.backstage.host.PresentationNames
 import com.eggman.backstage.ui.AgentScreenActivity
 import com.eggman.backstage.shell.ShellPage
 import com.eggman.backstage.shell.ShellLifecycle
+import com.eggman.backstage.ui.settings.SettingsStores
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.view.TextureRegistry
@@ -112,6 +113,10 @@ internal object BackstageShell {
                         ShellLifecycle.homePreview.show(BackstageDesktopBridge.presentation(), BackstageDesktopBridge::setPresentation))
                     "previewRestore" -> result.success(restorePreview(session))
                     "state" -> result.success(state(session))
+                    "homeShown" -> {
+                        if (session.phoneUi && session.resumed) ShellLifecycle.onMainScreenShown(activity)
+                        result.success(null)
+                    }
                     "checkUpdates" -> {
                         val manual = call.argument<Boolean>("manual") == true
                         worker.execute {
@@ -125,11 +130,23 @@ internal object BackstageShell {
                         result.success(true)
                     }
                     "openAgent" -> { restorePreview(session); result.success(openAgent(activity, call.argument<String>("screen"))) }
+                    "onboardingDone" -> result.success(SettingsStores.get(activity).onboardingDone)
                     "playerAttach" -> result.success(playerAttach(session))
                     "playerDetach" -> result.success(releasePlayer(session).let { true })
                     "touch" -> result.success(touch(session, call.argument<Int>("action") ?: -1,
                         (call.argument<Number>("x") ?: 0).toFloat(), (call.argument<Number>("y") ?: 0).toFloat()))
-                    "start" -> result.success(start(call.argument<String>("presentation")))
+                    "start" -> result.success(SettingsStores.get(activity).onboardingDone && start(call.argument<String>("presentation")))
+                    "desktopStartPrerequisite", "openDesktopManager", "openDesktopManagerDownload",
+                    "openDesktopAccessibility", "startPlayDesktop" -> {
+                        if (BuildConfig.DISTRIBUTION_CHANNEL != "play" || !session.phoneUi) result.notImplemented()
+                        else when (call.method) {
+                            "desktopStartPrerequisite" -> result.success(PlayDesktopStart.prerequisite(activity))
+                            "openDesktopManager" -> result.success(PlayDesktopStart.openManager(activity))
+                            "openDesktopManagerDownload" -> result.success(PlayDesktopStart.openDownload(activity, call.argument<String>("manager")))
+                            "openDesktopAccessibility" -> result.success(PlayDesktopStart.openAccessibility(activity))
+                            else -> PlayDesktopStart.launch(call.argument<String>("presentation"), result)
+                        }
+                    }
                     "present" -> result.success(present(call.argument<String>("presentation")))
                     "stop" -> result.success(true.also { BackstageDesktopBridge.stopDesktop() })
                     else -> result.notImplemented()
@@ -173,6 +190,7 @@ internal object BackstageShell {
         val geometry = BackstageDesktopBridge.geometry()
         return mapOf(
             "playerAllowed" to session.phoneUi,
+            "onboardingDone" to SettingsStores.get(session.activity).onboardingDone,
             "running" to (geometry != null),
             "presentation" to PresentationNames.wireName(BackstageDesktopBridge.presentation()),
             "width" to (geometry?.width ?: 0),

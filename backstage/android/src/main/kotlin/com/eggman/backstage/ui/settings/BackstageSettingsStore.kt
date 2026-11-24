@@ -16,12 +16,14 @@ import com.eggman.backstage.data.Settings
 interface BackstageSettingsStore {
     // ---- provider (bring your own key) -------------------------------------------------------
     var providerId: String
+    fun providerConfigured(): Boolean
+    fun providerCredentialsConfigured(): Boolean = providerConfigured()
     fun apiKey(providerId: String = this.providerId): String
     fun setApiKey(providerId: String, key: String)
     fun model(providerId: String = this.providerId): String
     fun modelOptions(providerId: String = this.providerId): List<String> = Provider.parse(providerId)?.suggestedModels.orEmpty()
     fun enabledModels(providerId: String = this.providerId): Set<String> = setOf(model(providerId)).filter(String::isNotBlank).toSet()
-    fun setEnabledModels(providerId: String, models: Set<String>) {}
+    fun setEnabledModels(providerId: String, models: Set<String>, preferred: String? = null) {}
     suspend fun fetchModels(providerId: String = this.providerId, force: Boolean = false): com.eggman.backstage.llm.ModelListResult =
         com.eggman.backstage.llm.ModelListResult.Unavailable("Model list unavailable")
     /** Context window in effect for the provider's model, the user's override (null = automatic), detection. */
@@ -169,6 +171,7 @@ interface BackstageSettingsStore {
     var ompTermuxEnabled: Boolean get() = false; set(@Suppress("UNUSED_PARAMETER") v) = Unit
     var termuxShellEnabled: Boolean get() = false; set(@Suppress("UNUSED_PARAMETER") v) = Unit
     var termuxShellAutoApprove: Boolean get() = false; set(@Suppress("UNUSED_PARAMETER") v) = Unit
+    val ompHarnessToken: String get() = ""
     val ompTermuxToken: String get() = ""
     fun rotateOmpTermuxToken(): String = ""
     fun rotateOmpHarnessToken(): String = ""
@@ -208,6 +211,9 @@ class CoreSettingsStore(private val s: Settings) : BackstageSettingsStore {
         get() = s.provider.name
         set(v) { Provider.parse(v)?.let { s.provider = it } }
 
+    override fun providerConfigured() = s.providerConfigured()
+    override fun providerCredentialsConfigured() = s.providerConfig().problem(requireModel = false) == null
+
     private fun provider(id: String): Provider = Provider.parse(id) ?: s.provider
 
     override fun apiKey(providerId: String) = s.apiKey(provider(providerId))
@@ -218,7 +224,8 @@ class CoreSettingsStore(private val s: Settings) : BackstageSettingsStore {
     override fun model(providerId: String) = s.model(provider(providerId))
     override fun modelOptions(providerId: String) = s.modelOptions(provider(providerId))
     override fun enabledModels(providerId: String) = s.enabledModels(provider(providerId))
-    override fun setEnabledModels(providerId: String, models: Set<String>) = s.setEnabledModels(provider(providerId), models)
+    override fun setEnabledModels(providerId: String, models: Set<String>, preferred: String?) =
+        s.setEnabledModels(provider(providerId), models, preferred)
     override suspend fun fetchModels(providerId: String, force: Boolean) = com.eggman.backstage.llm.ContextDetect.fetchModels(s, provider(providerId), force)
     override fun contextWindow(providerId: String) = s.contextWindow(provider(providerId))
     override fun contextOverride(providerId: String) = s.contextOverride(provider(providerId))
@@ -312,6 +319,7 @@ class CoreSettingsStore(private val s: Settings) : BackstageSettingsStore {
     override var ompTermuxEnabled: Boolean get() = s.ompTermuxEnabled; set(v) { s.ompTermuxEnabled = v }
     override var termuxShellEnabled: Boolean get() = s.termuxShellEnabled; set(v) { s.termuxShellEnabled = v }
     override var termuxShellAutoApprove: Boolean get() = s.termuxShellAutoApprove; set(v) { s.termuxShellAutoApprove = v }
+    override val ompHarnessToken: String get() = s.ompHarnessToken
     override val ompTermuxToken: String get() = s.ompTermuxToken
     override fun rotateOmpTermuxToken() = s.rotateOmpTermuxToken()
     override fun rotateOmpHarnessToken() = s.rotateOmpHarnessToken()

@@ -552,7 +552,11 @@ class AgentControllerImpl(
                     }.getOrNull().orEmpty(),
                     defaultApps = defaultAppsAsync.await(),
                     skills = skillsAsync.await(),
-                    ompHint = if (PLAY_DISTRIBUTION) "" else com.eggman.backstage.omp.OmpHarness.startUnavailableReason() ?: "Ready; omp_subagent, omp_subagent_status and omp_subagent_cancel are available.",
+                    ompHint = if (PLAY_DISTRIBUTION) {
+                        if (com.eggman.backstage.a11y.DistributionAccessibility.companionOmp)
+                            "Companion OMP subagents are available; the OMP chat engine is not proxied."
+                        else ""
+                    } else com.eggman.backstage.omp.OmpHarness.startUnavailableReason() ?: "Ready; omp_subagent, omp_subagent_status and omp_subagent_cancel are available.",
                     desktopShortcuts = if (PLAY_DISTRIBUTION || !hostPresent) "" else runCatching {
                         com.eggman.backstage.exec.DesktopShortcuts.promptLine(com.eggman.backstage.tools.desktopShortcutEnv(env.services.desktop))
                     }.getOrDefault(""),

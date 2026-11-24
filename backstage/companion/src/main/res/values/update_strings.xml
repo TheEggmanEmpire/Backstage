@@ -1,6 +1,6 @@
 <resources>
-    <string name="companion_update_title">Backstage Agent updates</string>
-    <string name="companion_update_privacy">Backstage Agent checks and downloads its own updates from the Backstage GitHub releases. Android asks before installing.</string>
+    <string name="companion_update_title">Backstage-play-agent updates</string>
+    <string name="companion_update_privacy">Backstage-play-agent checks and downloads its own updates from the Backstage GitHub releases. Android asks before installing.</string>
     <string name="companion_update_installed">Installed version %1$s</string>
     <string name="companion_update_latest">Release version %1$s</string>
     <string name="companion_update_not_checked">No update check yet.</string>
@@ -30,8 +30,8 @@
     <string name="companion_update_cancel">Cancel</string>
     <string name="companion_update_cancel_install">Cancel installation</string>
     <string name="companion_update_cancelled">Download cancelled.</string>
-    <string name="companion_update_unknown_sources_title">Allow Backstage Agent updates</string>
-    <string name="companion_update_unknown_sources_message">Android requires you to allow Backstage Agent to install its verified update. After granting access, return and tap Install update.</string>
+    <string name="companion_update_unknown_sources_title">Allow Backstage-play-agent updates</string>
+    <string name="companion_update_unknown_sources_message">Android requires you to allow Backstage-play-agent to install its verified update. After granting access, return and tap Install update.</string>
     <string name="companion_update_open_settings">Open Android settings</string>
     <string name="companion_update_not_now">Not now</string>
     <string name="companion_update_unknown_sources_unavailable">Android did not open the install permission settings.</string>

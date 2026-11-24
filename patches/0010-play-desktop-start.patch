@@ -1,0 +1,514 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Backstage <backstage@localhost>
+Date: Sun, 22 Nov 2026 14:00:00 +0900
+Subject: [PATCH] play-desktop-start
+
+Check desktop prerequisites and report the outcome of Play Home starts.
+
+---
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
+index 06ac314cfb79d535ef9afcd09c7eaa86f745a01c..c7ff77b12c87b7482a37f57246ee539e31e3e63c 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/MainActivity.kt
+@@ -1113,7 +1113,7 @@
+             ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+         }
+         pendingStartResult = result
+-        permissionHandler.postDelayed(startTimeout, 12_000)
++        permissionHandler.postDelayed(startTimeout, if (BuildConfig.DISTRIBUTION_CHANNEL == "play") 10_000L else 12_000L)
+         MirrorService.launch(this, width, height, density, secure, decorations) { outcome ->
+             runOnUiThread {
+                 val pendingResult = pendingStartResult ?: return@runOnUiThread
+diff --git a/lib/backstage_shell.dart b/lib/backstage_shell.dart
+index 2b828c588def46247b043efdf0a90c02b1390e25..cfe4af5b313765c0ed5c30dd031a4c113cdea4d1 100644
+--- a/lib/backstage_shell.dart
++++ b/lib/backstage_shell.dart
+@@ -436,7 +436,8 @@
+   Widget build(BuildContext context) {
+     if (!available) return const SizedBox.shrink();
+     // Not running: Home's Start button (below) starts either desktop; this card only shows progress or setup.
+-    if (!running && !starting && privileged) return const SizedBox.shrink();
++    if (!PlayDesktopStart.enabled && !running && !starting && privileged)
++      return const SizedBox.shrink();
+     final colors = Theme.of(context).colorScheme;
+     return Padding(
+       padding: const EdgeInsets.only(bottom: 16),
+@@ -485,6 +486,20 @@
+                     ),
+                   ],
+                 )
++              : PlayDesktopStart.enabled
++              ? Row(
++                  children: [
++                    const Expanded(child: Text('Desktop')),
++                    FilledButton(
++                      key: const ValueKey('backstage-start-in-app'),
++                      onPressed: () => PlayDesktopStart.run(
++                        context,
++                        () => PlayDesktopStart.startPlayer('in_app'),
++                      ),
++                      child: const Text('Start'),
++                    ),
++                  ],
++                )
+               : Row(
+                   children: [
+                     if (starting)
+diff --git a/lib/home_content.dart b/lib/home_content.dart
+index 79bc16d935078f3a19dc1db7e2c97a0884e793d1..e89c2710619f3a26663b845d3b03a3040cdc5095 100644
+--- a/lib/home_content.dart
++++ b/lib/home_content.dart
+@@ -245,8 +245,9 @@
+             ValueListenableBuilder<VoidCallback?>(
+               valueListenable: BackstageShellBridge.startBackground,
+               builder: (context, startBackground, _) {
++                final play = PlayDesktopStart.enabled && !widget.desktopWindow;
+                 final offersMenu =
+-                    startBackground != null &&
++                    (startBackground != null || play) &&
+                     !stopping &&
+                     !needsAndroidRepair &&
+                     !showRepairResult &&
+@@ -261,15 +262,26 @@
+                       MenuItemButton(
+                         key: const ValueKey('backstage-start-desktop'),
+                         leadingIcon: const Icon(Icons.headphones_outlined),
+-                        onPressed: startBackground,
+-                        child: const Text(
+-                          'Backstage (background, for the agent)',
++                        onPressed: play
++                            ? () => PlayDesktopStart.run(
++                                context,
++                                () => PlayDesktopStart.startPlayer('hidden'),
++                              )
++                            : startBackground,
++                        child: Text(
++                          play
++                              ? 'Backstage (background)'
++                              : 'Backstage (background, for the agent)',
+                         ),
+                       ),
+                       MenuItemButton(
+                         key: const ValueKey('dextop-start-normal'),
+                         leadingIcon: const Icon(Icons.play_arrow_rounded),
+-                        onPressed: !ready ? connect : toggleDisplay,
++                        onPressed: play
++                            ? startPlayNormalDesktop
++                            : !ready
++                            ? connect
++                            : toggleDisplay,
+                         child: const Text('Dextop (normal)'),
+                       ),
+                     ],
+@@ -320,6 +332,8 @@
+                         ? bridge.stopAuto
+                         : loading || stopping || hasExistingSession
+                         ? null
++                        : !active && play
++                        ? startPlayNormalDesktop
+                         : !active && !ready
+                         ? connect
+                         : toggleDisplay,
+diff --git a/lib/home_screen.dart b/lib/home_screen.dart
+index 5e2abca1ab62706e4289884b6b5a3d1e86807644..63020d00c21ffbd96f56011121acdef07b3282e5 100644
+--- a/lib/home_screen.dart
++++ b/lib/home_screen.dart
+@@ -1195,6 +1195,21 @@
+     }
+   }
+ 
++  Future<void> startPhoneDisplay() => bridge.start(
++    profile,
++    resolveHomePortrait(),
++    secure,
++    decorations: effectiveDecorations,
++    workspaceMagnificationPercent: workspaceMagnificationPercent,
++    magnifyWindowsWithDisplay: magnifyWindowsWithDisplay,
++  );
++
++  Future<void> startPlayNormalDesktop() =>
++      PlayDesktopStart.run(context, () async {
++        await startPhoneDisplay();
++        if (mounted) unawaited(refresh());
++      });
++
+   Future<void> toggleDisplay() async {
+     if (loading || stopping) return;
+     // Do not create a second phone-side session while Android Auto owns its
+@@ -1215,14 +1230,7 @@
+         await refresh();
+         if (stopping) await _pollStopCompletion();
+       } else {
+-        await bridge.start(
+-          profile,
+-          resolveHomePortrait(),
+-          secure,
+-          decorations: effectiveDecorations,
+-          workspaceMagnificationPercent: workspaceMagnificationPercent,
+-          magnifyWindowsWithDisplay: magnifyWindowsWithDisplay,
+-        );
++        await startPhoneDisplay();
+         await Future<void>.delayed(const Duration(milliseconds: 350));
+         await refresh();
+       }
+diff --git a/lib/main.dart b/lib/main.dart
+index 2fcdf0dbb13b5dadf413b05b1ef829a717fc5a77..f012dd609d38d2a5b99470525be8a2fb027d1a57 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -30,6 +30,7 @@
+ part 'home_screen.dart';
+ part 'home_content.dart';
+ part 'backstage_shell.dart';
++part 'play_desktop_start.dart';
+ part 'resolution_ui.dart';
+ part 'settings_screen.dart';
+ part 'display_topology.dart';
+diff --git a/lib/play_desktop_start.dart b/lib/play_desktop_start.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..f7085d8a754e30f9b0b6a3def742afeeb101b4fd
+--- /dev/null
++++ b/lib/play_desktop_start.dart
+@@ -0,0 +1,208 @@
++part of 'main.dart';
++
++class PlayDesktopStart {
++  static const enabled =
++      String.fromEnvironment('DISTRIBUTION_CHANNEL') == 'play';
++  static const _timeout = Duration(seconds: 11);
++  static bool _busy = false;
++
++  static MethodChannel get _channel => BackstageShellBridge.channel;
++
++  static Future<void> startPlayer(String presentation) async {
++    final started = await _channel.invokeMethod<bool>('startPlayDesktop', {
++      'presentation': presentation,
++    });
++    if (started != true) {
++      throw PlatformException(
++        code: 'start_failed',
++        message: 'The desktop could not start.',
++      );
++    }
++  }
++
++  static Future<void> run(
++    BuildContext context,
++    Future<void> Function() start,
++  ) async {
++    if (_busy) return;
++    _busy = true;
++    try {
++      final navigator = Navigator.of(context, rootNavigator: true);
++      final progress = DialogRoute<void>(
++        context: context,
++        barrierDismissible: false,
++        builder: (_) => const PopScope(
++          canPop: false,
++          child: AlertDialog(
++            title: Text('Starting desktop…'),
++            content: LinearProgressIndicator(),
++          ),
++        ),
++      );
++      unawaited(navigator.push(progress));
++      Map<String, Object?> prerequisites;
++      try {
++        final status = await _channel
++            .invokeMapMethod<String, Object?>('desktopStartPrerequisite')
++            .timeout(const Duration(seconds: 3));
++        if (status == null) {
++          throw PlatformException(
++            code: 'start_status',
++            message: 'Desktop prerequisites could not be checked.',
++          );
++        }
++        prerequisites = status;
++        if (status['blocker'] == null) await start().timeout(_timeout);
++      } finally {
++        if (navigator.mounted && progress.isActive)
++          navigator.removeRoute(progress);
++      }
++      if (context.mounted) await _showPrerequisite(context, prerequisites);
++    } on PlatformException catch (error) {
++      if (context.mounted)
++        await _showMessage(
++          context,
++          error.message ?? 'The desktop could not start.',
++        );
++    } on TimeoutException {
++      if (context.mounted) {
++        await _showMessage(
++          context,
++          'The desktop did not finish starting within 10 seconds.',
++        );
++      }
++    } on Exception {
++      if (context.mounted)
++        await _showMessage(context, 'The desktop could not start. Try again.');
++    } finally {
++      _busy = false;
++    }
++  }
++
++  static Future<void> _showPrerequisite(
++    BuildContext context,
++    Map<String, Object?> status,
++  ) async {
++    switch (status['blocker']) {
++      case null:
++        return;
++      case 'MANAGER_MISSING':
++        if (await _confirm(
++              context,
++              'Desktop privilege manager missing',
++              'Install Stellar or Shizuku Plus to start the desktop.',
++              'Get a privilege manager',
++            ) &&
++            context.mounted) {
++          final manager = await showDialog<String>(
++            context: context,
++            builder: (dialog) => SimpleDialog(
++              title: const Text('Choose a privilege manager'),
++              children: [
++                SimpleDialogOption(
++                  onPressed: () => Navigator.pop(dialog, 'stellar'),
++                  child: const Text('Get Stellar'),
++                ),
++                SimpleDialogOption(
++                  onPressed: () => Navigator.pop(dialog, 'shizukuPlus'),
++                  child: const Text('Get Shizuku Plus'),
++                ),
++              ],
++            ),
++          );
++          if (manager != null) {
++            await _channel.invokeMethod<bool>('openDesktopManagerDownload', {
++              'manager': manager,
++            });
++          }
++        }
++      case 'MANAGER_STOPPED':
++        if (await _confirm(
++          context,
++          'Desktop privilege manager stopped',
++          'Start Stellar or Shizuku Plus, then return and tap Start.',
++          'Open privilege manager',
++        )) {
++          await _channel.invokeMethod<bool>('openDesktopManager');
++        }
++      case 'MANAGER_PERMISSION':
++        if (await _confirm(
++          context,
++          'Desktop privilege permission missing',
++          'Allow Backstage in Stellar or Shizuku Plus, then tap Start.',
++          'Request permission',
++        )) {
++          await NativeBridge().requestShizuku();
++        }
++      case 'ACCESSIBILITY_OFF':
++        final strings = AppLocalizations.of(context);
++        final preferences = await SharedPreferences.getInstance();
++        if (!context.mounted) return;
++        const consentKey = 'accessibility_disclosure_accepted_v1';
++        final accepted = preferences.getBool(consentKey) ?? false;
++        final hint = status['restrictedSettingsHint'] == true
++            ? '\n\nIf the switch is greyed out, open Backstage’s App info → ⋮ → Allow restricted settings, then return to Accessibility.'
++            : '';
++        const missing =
++            'The Backstage desktop accessibility service (MirrorService) is off.';
++        if (await _confirm(
++          context,
++          accepted
++              ? 'Desktop accessibility is off'
++              : strings.accessibilityDisclosureTitle,
++          '$missing${accepted ? '' : '\n\n${strings.accessibilityDisclosureBody}'}$hint',
++          accepted
++              ? strings.setupTutorialAccessibilityButton
++              : strings.accessibilityDisclosureAgree,
++        )) {
++          if (!accepted) await preferences.setBool(consentKey, true);
++          await _channel.invokeMethod<bool>('openDesktopAccessibility');
++        }
++      default:
++        throw PlatformException(
++          code: 'start_status',
++          message: 'Desktop prerequisites could not be checked.',
++        );
++    }
++  }
++
++  static Future<bool> _confirm(
++    BuildContext context,
++    String title,
++    String message,
++    String fix,
++  ) async =>
++      await showDialog<bool>(
++        context: context,
++        builder: (dialog) => AlertDialog(
++          title: Text(title),
++          content: SingleChildScrollView(child: Text(message)),
++          actions: [
++            TextButton(
++              onPressed: () => Navigator.pop(dialog, false),
++              child: const Text('Cancel'),
++            ),
++            FilledButton(
++              onPressed: () => Navigator.pop(dialog, true),
++              child: Text(fix),
++            ),
++          ],
++        ),
++      ) ??
++      false;
++
++  static Future<void> _showMessage(BuildContext context, String message) =>
++      showDialog<void>(
++        context: context,
++        builder: (dialog) => AlertDialog(
++          title: const Text('Desktop did not start'),
++          content: Text(message),
++          actions: [
++            TextButton(
++              onPressed: () => Navigator.pop(dialog),
++              child: const Text('OK'),
++            ),
++          ],
++        ),
++      );
++}
+diff --git a/test/play_desktop_start_test.dart b/test/play_desktop_start_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..5bd410e89fbb398d6f0c35f816d4f112f00b9616
+--- /dev/null
++++ b/test/play_desktop_start_test.dart
+@@ -0,0 +1,129 @@
++import 'dart:async';
++
++import 'package:flutter/material.dart';
++import 'package:flutter/services.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:free_dextop/l10n/app_localizations.dart';
++import 'package:free_dextop/main.dart';
++import 'package:shared_preferences/shared_preferences.dart';
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++  final messenger =
++      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
++  final shell = BackstageShellBridge.channel;
++  late List<MethodCall> calls;
++  late String? blocker;
++  late Future<bool> Function() nativeStart;
++
++  setUp(() {
++    calls = [];
++    blocker = null;
++    nativeStart = () async => true;
++    SharedPreferences.setMockInitialValues({});
++    messenger.setMockMethodCallHandler(shell, (call) async {
++      calls.add(call);
++      return switch (call.method) {
++        'desktopStartPrerequisite' => {
++          'blocker': blocker,
++          'restrictedSettingsHint': true,
++        },
++        'startPlayDesktop' => await nativeStart(),
++        _ => true,
++      };
++    });
++  });
++
++  tearDown(() => messenger.setMockMethodCallHandler(shell, null));
++
++  Future<void> tapStart(WidgetTester tester) async {
++    await tester.pumpWidget(
++      MaterialApp(
++        localizationsDelegates: AppLocalizations.localizationsDelegates,
++        supportedLocales: AppLocalizations.supportedLocales,
++        home: Scaffold(
++          body: Builder(
++            builder: (context) => TextButton(
++              child: const Text('Start'),
++              onPressed: () => PlayDesktopStart.run(
++                context,
++                () => PlayDesktopStart.startPlayer('in_app'),
++              ),
++            ),
++          ),
++        ),
++      ),
++    );
++    await tester.tap(find.text('Start'));
++    await tester.pump();
++    await tester.pump(const Duration(milliseconds: 300));
++  }
++
++  testWidgets('missing manager offers both downloads without launching', (
++    tester,
++  ) async {
++    blocker = 'MANAGER_MISSING';
++    await tapStart(tester);
++    expect(find.text('Desktop privilege manager missing'), findsOneWidget);
++    expect(calls.map((call) => call.method), ['desktopStartPrerequisite']);
++    await tester.tap(find.text('Get a privilege manager'));
++    await tester.pumpAndSettle();
++    expect(find.text('Get Shizuku Plus'), findsOneWidget);
++    await tester.tap(find.text('Get Stellar'));
++    await tester.pumpAndSettle();
++    expect(calls.last.method, 'openDesktopManagerDownload');
++    expect(calls.last.arguments, {'manager': 'stellar'});
++  });
++
++  testWidgets('accessibility setup records consent before opening settings', (
++    tester,
++  ) async {
++    blocker = 'ACCESSIBILITY_OFF';
++    await tapStart(tester);
++    await tester.pumpAndSettle();
++    expect(find.text('Accessibility service disclosure'), findsOneWidget);
++    expect(find.textContaining('Allow restricted settings'), findsOneWidget);
++    expect(calls.map((call) => call.method), ['desktopStartPrerequisite']);
++    await tester.tap(find.text('Agree and open settings'));
++    await tester.pumpAndSettle();
++    final preferences = await SharedPreferences.getInstance();
++    expect(preferences.getBool('accessibility_disclosure_accepted_v1'), isTrue);
++    expect(calls.last.method, 'openDesktopAccessibility');
++  });
++
++  testWidgets('native launch failure replaces progress with its message', (
++    tester,
++  ) async {
++    final pending = Completer<bool>();
++    nativeStart = () => pending.future;
++    await tapStart(tester);
++    expect(find.text('Starting desktop…'), findsOneWidget);
++    expect(calls.last.arguments, {'presentation': 'in_app'});
++    pending.completeError(
++      PlatformException(
++        code: 'start_failed',
++        message: 'Display creation failed',
++      ),
++    );
++    await tester.pumpAndSettle();
++    expect(find.text('Starting desktop…'), findsNothing);
++    expect(find.text('Display creation failed'), findsOneWidget);
++    await tester.tap(find.text('OK'));
++    await tester.pumpAndSettle();
++  });
++
++  testWidgets('a missing native launch reply produces a timeout message', (
++    tester,
++  ) async {
++    final pending = Completer<bool>();
++    nativeStart = () => pending.future;
++    await tapStart(tester);
++    await tester.pump(const Duration(seconds: 11));
++    await tester.pumpAndSettle();
++    expect(find.text('Desktop did not start'), findsOneWidget);
++    expect(find.textContaining('within 10 seconds'), findsOneWidget);
++    pending.complete(true);
++    await tester.tap(find.text('OK'));
++    await tester.pumpAndSettle();
++  });
++}

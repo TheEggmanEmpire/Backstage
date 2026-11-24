@@ -139,11 +139,12 @@ object ModuleSettingsLogic {
         return null
     }
 
-    /** Plain http to a public host would send the bearer token unencrypted. */
+    /** HTTP carries keys and content without encryption. */
     fun insecureWarning(url: String): String? {
         val u = runCatching { URI(url.trim()) }.getOrNull() ?: return null
         if (u.scheme?.lowercase() != "http") return null
         val h = u.host?.lowercase() ?: return null
+        if (com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION) return "Unencrypted connection: keys and content travel in plain text."
         val local = h == "localhost" || h.startsWith("127.") || h.startsWith("10.") || h.startsWith("192.168.") ||
             Regex("^172\\.(1[6-9]|2\\d|3[01])\\.").containsMatchIn(h) || h.endsWith(".local") || h.endsWith(".lan")
         return if (local) null else "Plain http: the token and every tool call travel unencrypted. Use https."

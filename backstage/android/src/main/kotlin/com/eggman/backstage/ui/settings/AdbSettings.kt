@@ -1,6 +1,7 @@
 package com.eggman.backstage.ui.settings
 
 import androidx.compose.runtime.Composable
+import com.eggman.backstage.BuildConfig.PLAY_DISTRIBUTION
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
@@ -23,7 +24,16 @@ internal fun rememberAdbAutoApprove(store: BackstageSettingsStore): State<Boolea
 
 /** Shizuku sends permission events; Dextop's wireless connection can also change silently. */
 @Composable
-internal fun rememberAdbAvailable(): State<Boolean> = produceState(Privileged.available()) {
+internal fun rememberAdbAvailable(): State<Boolean> {
+    if (PLAY_DISTRIBUTION) {
+        val available = CompanionSetting.SHELL in availableCompanionSettings()
+        return remember(available) { mutableStateOf(available) }
+    }
+    return rememberLocalAdbAvailable()
+}
+
+@Composable
+private fun rememberLocalAdbAvailable(): State<Boolean> = produceState(Privileged.available()) {
     val unregister = Privileged.addPermissionListener { value = Privileged.available() }
     try {
         while (true) {

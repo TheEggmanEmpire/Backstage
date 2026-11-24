@@ -34,7 +34,7 @@ class GlobalModelsSettingsRobolectricTest {
         compose.onNode(hasSetTextAction()).assertTextContains(Settings.DEFAULT_GLOBAL_INSTRUCTIONS)
     }
 
-    @Test fun modelListLoadsEndpointAndAllAndOneSwitchesKeepMainEnabled() {
+    @Test fun modelSwitchesSelectFirstEnabledAndAllowDisablingMain() {
         val settings = Settings(MemoryStore()).apply {
             provider = Provider.CUSTOM
             setModel(provider, "first")
@@ -55,15 +55,19 @@ class GlobalModelsSettingsRobolectricTest {
         }
         compose.mainClock.advanceTimeBy(1_100)
         compose.waitUntil(5_000) { calls > 0 }
+        compose.onNodeWithContentDescription("Enable third").performClick()
+        compose.onNodeWithText("third (main)").assertExists()
+        compose.runOnIdle { assertEquals("third", settings.model()) }
         compose.onNodeWithText("All off").performClick()
-        compose.runOnIdle { assertEquals(setOf("first"), settings.enabledModels()) }
-        compose.onNodeWithContentDescription("Enable first").assertIsNotEnabled().assertIsOn()
+        compose.runOnIdle { assertTrue(settings.enabledModels().isEmpty()) }
+        compose.onNodeWithContentDescription("Enable first").assertIsOff()
         compose.onNodeWithContentDescription("Enable second").performClick()
-        compose.onNodeWithContentDescription("Use second as main model").performClick()
+        compose.onNodeWithText("second (main)").assertExists()
         compose.runOnIdle { assertEquals("second", settings.model()) }
         compose.onNodeWithText("All on").performClick()
         compose.runOnIdle { assertEquals(setOf("first", "second", "third"), settings.enabledModels()) }
-        compose.onNodeWithContentDescription("Enable first").performClick()
-        compose.runOnIdle { assertEquals(setOf("second", "third"), settings.enabledModels()) }
+        compose.onNodeWithContentDescription("Enable second").assertIsEnabled().performClick()
+        compose.onNodeWithText("first (main)").assertExists()
+        compose.runOnIdle { assertEquals(setOf("first", "third"), settings.enabledModels()) }
     }
 }

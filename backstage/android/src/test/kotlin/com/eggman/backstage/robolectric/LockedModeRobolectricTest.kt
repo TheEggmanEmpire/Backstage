@@ -67,6 +67,7 @@ class LockedModeRobolectricTest {
         RoboSupport.resetProcess()
         LockedModeLog.reset()
         ctx = ApplicationProvider.getApplicationContext()
+        com.eggman.backstage.data.Settings(ctx).onboardingDone = true
         shadowOf(ctx.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
     }
 
@@ -74,6 +75,15 @@ class LockedModeRobolectricTest {
         DesktopHosts.current = null
         LockedModeLog.reset()
         RoboSupport.resetProcess()
+    }
+
+    @Test fun aTaskCannotStartTheDesktopBeforeOnboardingFinishes() = runBlocking {
+        com.eggman.backstage.data.Settings(ctx).onboardingDone = false
+        val host = LockedHost(fake = FakeDesktopHost(active = false))
+        DesktopHosts.current = host
+        val failure = runCatching { AndroidAgentEnvironment(ctx).executor(TargetKind.DESKTOP) }.exceptionOrNull()
+        assertEquals("Finish Backstage setup before starting the desktop.", failure?.message)
+        assertFalse(host.calls.any { it.startsWith("start ") })
     }
 
     @Test fun aDesktopStartedBeforeTheSettingIsRestartedHiddenWhenATaskNeedsItLocked() = runBlocking {

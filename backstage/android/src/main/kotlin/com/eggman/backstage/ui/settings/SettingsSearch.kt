@@ -22,19 +22,27 @@ internal enum class SettingsGroup(val title: String, val subtitle: String) {
     ABOUT("Backup & about", "Export or restore settings, revisit setup and read version and license information."),
 }
 
+internal enum class CompanionSetting { SHELL, SKILL_SCRIPTS, ACCESSIBILITY, OMP }
+
 internal data class SettingsSearchEntry(
     val id: String,
     val title: String,
     val description: String,
     val group: SettingsGroup,
     val keywords: List<String>,
+    val companionSetting: CompanionSetting? = null,
 )
 
 /** Search only this public metadata. Saved keys, instructions and memory contents never enter the index. */
 internal object SettingsSearch {
-    val entries: List<SettingsSearchEntry> = buildList {
-        fun entry(group: SettingsGroup, title: String, description: String, keywords: String) {
-            add(SettingsSearchEntry(group.name.lowercase(Locale.ROOT) + ":" + title.lowercase(Locale.ROOT), title, description, group, words(keywords)))
+    val entries get() = search("")
+
+    private val catalogue: List<SettingsSearchEntry> = buildList {
+        fun entry(group: SettingsGroup, title: String, description: String, keywords: String, companionSetting: CompanionSetting? = null) {
+            add(SettingsSearchEntry(
+                group.name.lowercase(Locale.ROOT) + ":" + title.lowercase(Locale.ROOT),
+                title, description, group, words(keywords), companionSetting,
+            ))
         }
         fun model(t: String, d: String, k: String) = entry(SettingsGroup.MODEL, t, d, k)
         fun instructions(t: String, d: String, k: String) = entry(SettingsGroup.INSTRUCTIONS, t, d, k)
@@ -47,13 +55,13 @@ internal object SettingsSearch {
         fun bubble(t: String, d: String, k: String) = entry(SettingsGroup.BUBBLE, t, d, k)
         fun connection(t: String, d: String, k: String) = entry(SettingsGroup.CONNECTIONS, t, d, k)
         fun automation(t: String, d: String, k: String) = entry(SettingsGroup.AUTOMATION, t, d, k)
-        fun omp(t: String, d: String, k: String) = entry(SettingsGroup.OMP, t, d, k)
+        fun omp(t: String, d: String, k: String) = entry(SettingsGroup.OMP, t, d, k, CompanionSetting.OMP)
         fun about(t: String, d: String, k: String) = entry(SettingsGroup.ABOUT, t, d, k)
         entry(SettingsGroup.APP, "App settings", "Display, input, Linux and other app preferences. Opens Dextop settings.", "theme appearance dark light keyboard mouse touch resolution linux terminal preferences flutter")
-        model("Agent engine", "Choose Backstage or OMP for chat tasks.", "harness native loop")
+        if (!PLAY_DISTRIBUTION) model("Agent engine", "Choose Backstage or OMP for chat tasks.", "harness native loop")
         model("AI provider", "Choose the service that receives AI requests.", "model llm ai openai anthropic claude google gemini chatgpt openrouter deepseek ollama local lan custom compatible endpoint service venice opencode go proxy gateway")
         model("API key", "API key (optional) for the selected provider; show or hide the saved key.", "token secret credential password authentication")
-        model("ChatGPT account", "Sign in with ChatGPT, Use a code instead, or Sign out. Address from the browser can complete sign-in.", "subscription plus pro business enterprise login oauth account browser device code")
+        model("ChatGPT account", "Connect a ChatGPT subscription with a device code or sign out.", "subscription plus pro business enterprise login oauth account browser device code get copy")
         model("Models", "Enable models, All on, All off, Reload models, Search models and Only enabled. Select the main model.", "llm switching list refresh selection")
         model("Main model / add model ID", "Enter a model identifier and tap Use to add or select it.", "llm name custom selection")
         model("Base URL", "Set the provider API endpoint or Reset to defaults.", "host address endpoint server custom proxy")
@@ -74,9 +82,9 @@ internal object SettingsSearch {
         agent("Fast mode", "Shorter waits for the screen to settle and no cursor lead.", "speed quick latency performance delay")
         safety("Confirm before irreversible actions", "Sending, posting, buying, deleting or calling waits for your approval.", "approve permission ask safety dangerous confirmation consent")
         safety("When nobody can confirm", "Deny, Ask in a notification or Allow unattended confirmations.", "approve permission ask safety unattended schedules notification automation")
-        if (!PLAY_DISTRIBUTION) safety("ADB commands", "Ask each time or Auto for shell-user commands.", "shell command terminal approve permission stellar shizuku wireless debugging")
+        entry(SettingsGroup.SAFETY, "ADB commands", "Ask each time or Auto for shell-user commands.", "shell command terminal approve permission stellar shizuku wireless debugging", CompanionSetting.SHELL)
         safety("Remote callers may use the phone screen", "Permit MCP clients and the broadcast API to use the phone instead of only DeX.", "external permission access remote screen security")
-        if (!PLAY_DISTRIBUTION) safety("Run skill scripts", "Off, Ask or Auto for native scripts; commands run with shell-user access.", "code execution approve permission safety plugin shell")
+        entry(SettingsGroup.SAFETY, "Run skill scripts", "Off, Ask or Auto for native scripts; commands run with shell-user access.", "code execution approve permission safety plugin shell", CompanionSetting.SKILL_SCRIPTS)
         screen("Vision", "Send screenshots to the model when the element list is not enough.", "image picture screenshot multimodal screen")
         screen("Screenshots", "JPEG quality and Scale control screenshot image quality and resolution.", "images pictures vision quality resolution compression size")
         screen("JPEG quality (30-100)", "Compression quality of screenshots sent to the provider.", "image picture screenshot resolution compression tokens")
@@ -92,10 +100,10 @@ internal object SettingsSearch {
         desktop("Locked mode", "Desktop lock diagnostics, Restart the desktop now or Allow waking the desktop.", "lockscreen wake permission repair display")
         desktop("Desktop focus", "Own or Shared keyboard focus, applied the next time the desktop starts.", "keyboard typing dex input quiet")
         if (!PLAY_DISTRIBUTION) modules("Consent to accessibility use", "Allow or withdraw Backstage accessibility consent.", "service permission disclosure privacy access")
-        if (!PLAY_DISTRIBUTION) modules("Turn the service back on automatically", "Re-enable accessibility when the desktop resets the list.", "service restart accessibility stellar shizuku debugging")
-        if (!PLAY_DISTRIBUTION) modules("Pause while a detector app is in front", "Temporarily switch accessibility off for detector apps.", "service detection accessibility warning banking")
-        if (!PLAY_DISTRIBUTION) modules("Re-check seconds", "Detector pause re-check interval.", "poll delay accessibility detection")
-        if (!PLAY_DISTRIBUTION) modules("Detector packages", "Package names, colon- or comma-separated.", "app detection accessibility banking")
+        entry(SettingsGroup.ACCESSIBILITY, "Turn the service back on automatically", "Re-enable accessibility when the desktop resets the list.", "service restart accessibility stellar shizuku debugging", CompanionSetting.ACCESSIBILITY)
+        entry(SettingsGroup.ACCESSIBILITY, "Pause while a detector app is in front", "Temporarily switch accessibility off for detector apps.", "service detection accessibility warning banking", CompanionSetting.ACCESSIBILITY)
+        entry(SettingsGroup.ACCESSIBILITY, "Re-check seconds", "Detector pause re-check interval.", "poll delay accessibility detection", CompanionSetting.ACCESSIBILITY)
+        entry(SettingsGroup.ACCESSIBILITY, "Detector packages", "Package names, colon- or comma-separated.", "app detection accessibility banking", CompanionSetting.ACCESSIBILITY)
         modules("Weather (OpenWeatherMap)", "Optional weather tool configuration and Test.", "forecast temperature climate module")
         modules("OpenWeatherMap API key", "Weather service credential; without it the agent uses web search.", "token secret credential password forecast")
         modules("Home location", "Weather location used when no place is named.", "weather city place address")
@@ -140,15 +148,15 @@ internal object SettingsSearch {
         automation("Reset plugin signing key", "Revoke saved Tasker and MacroDroid actions until saved again.", "secret credential security rotate automation")
         automation("Broadcast API", "Android broadcast reference and Copy adb example.", "intent tasker macrodroid integration command automation")
         automation("Include result text in open broadcasts", "Without reply_package, every app receives results; off sends status only.", "privacy notification broadcast automation result")
-        if (!PLAY_DISTRIBUTION) omp("Enable OMP harness", "Enable shell-user subagents and the local key broker.", "subagent runtime code shell bun harness")
+        omp("Enable OMP harness", "Enable shell-user subagents and the local key broker.", "subagent runtime code shell bun harness")
         if (!PLAY_DISTRIBUTION) omp("Chat engine", "Choose Backstage or OMP for chats.", "agent native loop harness")
-        if (!PLAY_DISTRIBUTION) omp("Broker port", "Local OMP credential broker port.", "server key endpoint network harness")
-        if (!PLAY_DISTRIBUTION) omp("Install / Repair / Update omp", "Install bundled runtime pins, repair the harness or download an update.", "runtime upgrade download bun harness")
-        if (!PLAY_DISTRIBUTION) omp("OMP approvals", "Ask each time or Auto for shell-user subagent tasks.", "approve permission safety dangerous shell command")
-        if (!PLAY_DISTRIBUTION) omp("Rotate harness token", "Revoke the old OMP harness credential.", "secret credential password security")
-        if (!PLAY_DISTRIBUTION) omp("Enable Termux pairing", "Allow Termux to fetch runtime and provider keys; Copy setup line or Rotate pairing.", "terminal shell setup secret credential password")
-        if (!PLAY_DISTRIBUTION) omp("Shell access (uid 2000)", "Allow Termux pairing token holders to request shell-user commands.", "terminal adb command permission security")
-        if (!PLAY_DISTRIBUTION) omp("Termux shell approvals", "Ask each time or Auto for Termux shell commands.", "approve permission safety dangerous command terminal")
+        omp("Broker port", "Local OMP credential broker port.", "server key endpoint network harness")
+        omp("Install / Repair / Update omp", "Install bundled runtime pins, repair the harness or download an update.", "runtime upgrade download bun harness")
+        omp("OMP approvals", "Ask each time or Auto for shell-user subagent tasks.", "approve permission safety dangerous shell command")
+        omp("Rotate harness token", "Revoke the old OMP harness credential.", "secret credential password security")
+        omp("Enable Termux pairing", "Allow Termux to fetch runtime and provider keys; Copy setup line or Rotate pairing.", "terminal shell setup secret credential password")
+        omp("Shell access (uid 2000)", "Allow Termux pairing token holders to request shell-user commands.", "terminal adb command permission security")
+        omp("Termux shell approvals", "Ask each time or Auto for Termux shell commands.", "approve permission safety dangerous command terminal")
         entry(SettingsGroup.UPDATES, "App updates", "Installed and latest versions, last check, Check now and Update.", "upgrade release download install apk github version checksum notification")
         about("Backup", "Save or restore all Backstage settings and user skills as a .zip file.", "export import restore save archive zip")
         about("Export settings", "Write a backup containing readable API keys and tokens.", "backup save export zip archive")
@@ -162,7 +170,7 @@ internal object SettingsSearch {
         Document(entry, listOf(words(entry.title) to 100, words(entry.description) to 45,
             words(entry.group.title) to 35, entry.keywords to 60))
 
-    private val documents = entries.map(::document)
+    private val documents = catalogue.map(::document)
 
     /** Runtime tool names are public metadata too; keep the core search independent of ToolRegistry/Android. */
     fun mcpTools(names: Collection<String>): List<SettingsSearchEntry> = names.distinct().map { name ->
@@ -171,10 +179,17 @@ internal object SettingsSearch {
     }
 
     /** AND across query words, OR across fields. Exact title hits outrank synonyms; ties retain catalogue order. */
-    fun search(query: String, extraEntries: List<SettingsSearchEntry> = emptyList()): List<SettingsSearchEntry> {
+    fun search(
+        query: String,
+        extraEntries: List<SettingsSearchEntry> = emptyList(),
+        companionSettings: Set<CompanionSetting> = emptySet(),
+    ): List<SettingsSearchEntry> {
         val queryWords = words(query).distinct()
-        if (queryWords.isEmpty()) return if (query.isBlank()) entries + extraEntries else emptyList()
-        return (documents + extraEntries.map(::document)).mapNotNull { document ->
+        if (queryWords.isEmpty() && query.isNotBlank()) return emptyList()
+        val available = documents + extraEntries.map(::document)
+        return available.mapNotNull { document ->
+            val required = document.entry.companionSetting
+            if (PLAY_DISTRIBUTION && required != null && required !in companionSettings) return@mapNotNull null
             var score = 0
             for (queryWord in queryWords) {
                 val best = document.fields.maxOf { (candidates, weight) ->

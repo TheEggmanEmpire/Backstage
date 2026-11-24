@@ -1,95 +1,108 @@
 package com.eggman.backstage.ui.settings
 
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import com.eggman.backstage.llm.ChatGptAuth
 import com.eggman.backstage.llm.ChatGptDeviceCode
 import com.eggman.backstage.llm.ChatGptTokens
+import com.eggman.backstage.llm.LlmErrorKind
 import com.eggman.backstage.llm.LlmException
-import com.eggman.backstage.llm.LoopbackCallback
-import com.eggman.backstage.llm.Pkce
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.net.UnknownHostException
 
-/**
- * "Sign in with ChatGPT" for Settings. Lives for the whole process (not the screen), because the browser
- * sign-in sends the user out of the app and back.
- *
- * [save] stores the tokens (Settings, encrypted); [openUrl] opens an address in the phone's browser.
- */
-class ChatGptSignIn(
+/** Polls for approval in process scope while the user signs in in the browser. */
+internal class ChatGptSignIn(
     private val save: (ChatGptTokens?) -> Unit,
+    private val connectivityRestored: Flow<Unit>,
     private val auth: ChatGptAuth = ChatGptAuth(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
 ) {
     sealed interface State {
         data object Idle : State
-        /** Waiting for the browser to come back; [expectedState] guards a pasted address. */
-        data class Browser(val url: String, internal val pkce: Pkce, internal val expectedState: String) : State
-        data class Code(val device: ChatGptDeviceCode) : State
-        data object Finishing : State
-        data class Failed(val message: String) : State
-        data class Done(val tokens: ChatGptTokens) : State
+        data object Requesting : State
+        data class Code(val device: ChatGptDeviceCode, val networkError: String? = null) : State
+        data class Failed(val message: String, val canRetry: Boolean) : State
+        data object Done : State
     }
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state
+    private val retryVersion = MutableStateFlow(0L)
     private var job: Job? = null
 
-    fun startBrowser(openUrl: (String) -> Unit) = launchFlow {
-        val pkce = Pkce.create()
-        val st = Pkce.state()
-        val url = auth.authorizeUrl(pkce, st)
-        val listener = LoopbackCallback()
-        val server = withContext(Dispatchers.IO) { listener.bind() }
-        val code = try {
-            _state.value = State.Browser(url, pkce, st)
-            openUrl(url)
-            withTimeoutOrNull(BROWSER_LIFETIME_MS) { listener.await(server, st) }
+    fun startCode() {
+        cancel()
+        _state.value = State.Requesting
+        job = scope.launch {
+            try {
+                val device = auth.startDeviceCode()
+                val tokens = withTimeoutOrNull(CODE_LIFETIME_MS) { waitForApproval(device) }
+                ensureActive()
+                if (tokens == null) {
+                    _state.value = State.Failed("The code expired before it was approved. Get a new one.", canRetry = true)
+                } else {
+                    save(tokens)
+                    _state.value = State.Done
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: LlmException) {
+                val networkError = e.networkMessage()
+                _state.value = State.Failed(networkError ?: e.message.orEmpty(), canRetry = networkError != null)
+            } catch (e: Exception) {
+                _state.value = State.Failed("ChatGPT sign-in failed. Get a new code.", canRetry = true)
+            }
+        }
+    }
+
+    private suspend fun CoroutineScope.waitForApproval(device: ChatGptDeviceCode): ChatGptTokens {
+        val waiting = State.Code(device)
+        val intervalMs = device.intervalSec * 1000
+        val monitor = launch(start = CoroutineStart.UNDISPATCHED) {
+            connectivityRestored.collect { retryVersion.update { it + 1 } }
+        }
+        try {
+            _state.value = waiting
+            while (true) {
+                delay(intervalMs)
+                var attemptVersion = retryVersion.value
+                val tokens = auth.pollDeviceCode(device) { error ->
+                    ensureActive()
+                    _state.value = waiting.copy(networkError = error.networkMessage())
+                    attemptVersion = retryVersion.first { it != attemptVersion }
+                    _state.value = waiting
+                    delay(intervalMs)
+                }
+                if (tokens != null) return tokens
+            }
         } finally {
-            runCatching { server.close() }
+            monitor.cancel()
         }
-        if (code == null) {
-            _state.value = State.Failed("The browser sign-in timed out. Start it again.")
-            return@launchFlow
-        }
-        finish { auth.exchangeCode(code, pkce.verifier) }
     }
 
-    /** Fallback when the browser could not reach this phone's sign-in listener: the address it ended on. */
-    fun submitRedirect(address: String) {
-        val b = _state.value as? State.Browser ?: return
-        val (code, st) = ChatGptAuth.parseCallback(address) ?: run {
-            _state.value = State.Failed("That is not the sign-in address. It starts with ${ChatGptAuth.LOOPBACK_REDIRECT}?code=…")
-            job?.cancel()
-            return
+    fun retry() {
+        when (val current = _state.value) {
+            is State.Code -> if (current.networkError != null) retryVersion.update { it + 1 }
+            is State.Failed -> if (current.canRetry) startCode()
+            else -> Unit
         }
-        if (st != b.expectedState) {
-            job?.cancel()
-            _state.value = State.Failed("That address belongs to another sign-in attempt. Start again.")
-            return
-        }
-        launchFlow { finish { auth.exchangeCode(code, b.pkce.verifier) } }
-    }
-
-    fun startCode() = launchFlow {
-        val device = auth.startDeviceCode()
-        _state.value = State.Code(device)
-        val deadline = System.currentTimeMillis() + CODE_LIFETIME_MS
-        while (System.currentTimeMillis() < deadline) {
-            delay(device.intervalSec * 1000)
-            val tokens = auth.pollDeviceCode(device) ?: continue
-            finish { tokens }
-            return@launchFlow
-        }
-        _state.value = State.Failed("The code expired before it was approved. Get a new one.")
     }
 
     fun cancel() {
@@ -102,30 +115,64 @@ class ChatGptSignIn(
         save(null)
     }
 
-    private suspend fun finish(block: suspend () -> ChatGptTokens) {
-        _state.value = State.Finishing
-        val tokens = block()
-        save(tokens)
-        _state.value = State.Done(tokens)
-    }
-
-    private fun launchFlow(block: suspend () -> Unit) {
-        job?.cancel()
-        job = scope.launch {
-            try {
-                block()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: LlmException) {
-                _state.value = State.Failed(e.message ?: "Sign-in failed")
-            } catch (e: Exception) {
-                _state.value = State.Failed("Sign-in failed: ${e.message ?: e.javaClass.simpleName}")
-            }
-        }
+    private fun LlmException.networkMessage(): String? = when {
+        cause is UnknownHostException -> "Backstage could not resolve auth.openai.com. Check your connection or DNS settings and retry."
+        kind == LlmErrorKind.NETWORK -> "Backstage could not connect to ChatGPT. Check your internet connection and retry."
+        kind == LlmErrorKind.TIMEOUT -> "ChatGPT sign-in timed out. Check your internet connection and retry."
+        else -> null
     }
 
     companion object {
-        const val CODE_LIFETIME_MS = 15 * 60_000L
-        const val BROWSER_LIFETIME_MS = 10 * 60_000L
+        private const val CODE_LIFETIME_MS = 15 * 60_000L
     }
+}
+
+/** Emits when the app's default network becomes usable, including after Android lifts a UID network block. */
+internal fun ConnectivityManager.signInConnectivityRestored(): Flow<Unit> = callbackFlow {
+    fun NetworkCapabilities?.internetValidated(): Boolean =
+        this != null && hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+
+    val initialNetwork = activeNetwork
+    val initiallyValidated = initialNetwork?.let(::getNetworkCapabilities).internetValidated()
+    val callback = object : ConnectivityManager.NetworkCallback() {
+        private var current = initialNetwork
+        private var validated = initiallyValidated
+        private var blocked = false
+        private var usable = initialNetwork.takeIf { initiallyValidated }
+
+        private fun update() {
+            val next = current.takeIf { validated && !blocked }
+            if (next != null && next != usable) trySend(Unit)
+            usable = next
+        }
+
+        override fun onAvailable(network: Network) {
+            if (current == network) return
+            current = network
+            validated = false
+            blocked = false
+            update()
+        }
+
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            if (network != current) return
+            validated = capabilities.internetValidated()
+            update()
+        }
+
+        override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+            if (network != current) return
+            this.blocked = blocked
+            update()
+        }
+
+        override fun onLost(network: Network) {
+            if (network != current) return
+            current = null
+            update()
+        }
+    }
+    registerDefaultNetworkCallback(callback)
+    awaitClose { unregisterNetworkCallback(callback) }
 }

@@ -11,6 +11,7 @@
 /backstage/local.properties
 /backstage/android/build/
 /backstage/android/.cxx/
+/backstage/companion/.cxx/
 /backstage/companion/build/
 
 # Runtime-bearing release APKs exceed GitHub's 100 MB git-file limit: publish them as GitHub Release assets.

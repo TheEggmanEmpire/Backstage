@@ -51,6 +51,7 @@ object ShellLifecycle {
     private var app: Context? = null
     private var registeredHost: DesktopHost? = null
     private var lastPresentation: Presentation = Presentation.NONE
+    private var mainScreenOpened = false
     private val leave = Runnable { if (started.isEmpty()) setVisible(false) }
 
     /** Until when (uptime ms) the next "app visible" keeps the desktop in the background ([openAppKeepingBackground]). */
@@ -140,6 +141,7 @@ object ShellLifecycle {
      * the sheet shows when DeX cannot come, or null. Main thread.
    */
     fun onBubbleChatOpened(context: Context, peek: Boolean, notice: (String) -> Unit = {}): String? {
+        if (!SettingsStores.get(context).onboardingDone) return null
         val host = AgentAccess.host() ?: return null
         val target = runCatching { SettingsStores.get(context).defaultTarget }.getOrDefault(chip)
         val presentation = runCatching { if (host.sessionActive()) host.presentation() else Presentation.NONE }
@@ -229,6 +231,7 @@ object ShellLifecycle {
         homePreview.onPresentationRequested()
         main.removeCallbacks(leave)
         _visible.value = false
+        mainScreenOpened = false
         lastPresentation = Presentation.NONE
         keepArmedUntil = 0L
         _keepBackground.value = false
@@ -281,6 +284,7 @@ object ShellLifecycle {
     private fun setVisible(value: Boolean) {
         if (_visible.value == value) return
         _visible.value = value
+        if (!value) mainScreenOpened = false
         val context = app ?: return
         val host = AgentAccess.host() ?: return
         val settings = runCatching { SettingsStores.get(context) }.getOrNull() ?: return
@@ -288,7 +292,7 @@ object ShellLifecycle {
             .getOrDefault(Presentation.NONE)
         val decision = if (value) {
             if (android.os.SystemClock.uptimeMillis() < keepArmedUntil) { keepArmedUntil = 0L; _keepBackground.value = true }
-            ShellPresence.onAppVisible(presentation, settings.startDesktopOnOpen, canStart = true,
+            ShellPresence.onAppVisible(presentation, startOnOpen = false, canStart = false,
                 keepBackground = _keepBackground.value, phoneMode = _phoneMode.value)
         } else {
             _keepBackground.value = false
@@ -296,6 +300,19 @@ object ShellLifecycle {
                 keepHidden = homePreview.keepHiddenOnLeave)
         }
         apply(decision, if (value) "app_visible" else "app_left")
+    }
+
+    /** Main thread, after the resumed Home or Agent screen is shown. */
+    fun onMainScreenShown(activity: Activity) {
+        if (mainScreenOpened || !_visible.value || !countsAsApp(activity)) return
+        val settings = SettingsStores.get(activity)
+        if (!settings.onboardingDone) return
+        val host = AgentAccess.host() ?: return
+        mainScreenOpened = true
+        val presentation = runCatching { if (host.sessionActive()) host.presentation() else Presentation.NONE }
+            .getOrDefault(Presentation.NONE)
+        apply(ShellPresence.onAppVisible(presentation, settings.startDesktopOnOpen, canStart = true,
+            keepBackground = _keepBackground.value, phoneMode = _phoneMode.value), "main_screen_visible")
     }
 
     private fun apply(decision: ShellPresence.Decision, reason: String, notice: ((String) -> Unit)? = sheetNotice) {
@@ -308,14 +325,15 @@ object ShellLifecycle {
                 Log.i(TAG, "$reason: desktop -> ${decision.presentation} applied=$ok")
             }
             ShellPresence.Decision.StartInApp -> SurfaceScope.launch {
-                // Only with working shell access: without it the start would just fail (Dextop's setup comes first).
+                if (app?.let { SettingsStores.get(it).onboardingDone } != true) return@launch
                 if (!runCatching { host.privilegedAvailable() }.getOrDefault(false) || host.sessionActive()) return@launch
-                val geometry = runCatching { host.startDesktop(Presentation.IN_APP) }.getOrNull()
-                Log.i(TAG, "$reason: desktop start in the app -> ${geometry != null}")
+                // Home and the agent player take the session when their preview is visible.
+                val geometry = runCatching { host.startDesktop(Presentation.HIDDEN) }.getOrNull()
+                Log.i(TAG, "$reason: desktop start for the app preview -> ${geometry != null}")
             }
             ShellPresence.Decision.StartMini -> {
-                val context = app
-                val locked = context != null && com.eggman.backstage.notify.SessionNotification.deviceLocked(context)
+                val context = app?.takeIf { SettingsStores.get(it).onboardingDone } ?: return
+                val locked = com.eggman.backstage.notify.SessionNotification.deviceLocked(context)
                 val privileged = runCatching { host.privilegedAvailable() }.getOrDefault(false)
                 when {
                     com.eggman.backstage.agent.SessionStop.autoStartBlocked() -> Unit
@@ -326,7 +344,7 @@ object ShellLifecycle {
                         val geometry = runCatching { host.startDesktop(Presentation.MINI) }.getOrNull()
                         Log.i(TAG, "$reason: desktop start as the popup -> ${geometry != null}")
                         if (geometry == null) main.post { notice?.invoke(ShellPresence.SHEET_START_FAILED) }
-                        else if (context != null && runCatching { com.eggman.backstage.data.Settings(context).mayAutoEnableAccessibility }.getOrDefault(false)) {
+                        else if (runCatching { com.eggman.backstage.data.Settings(context).mayAutoEnableAccessibility }.getOrDefault(false)) {
                             // Dextop may rewrite the accessibility list while starting (as for the agent's own starts).
                             com.eggman.backstage.a11y.AccessibilityAutoEnable.reassertSoon(context, delayMs = 600)
                         }
