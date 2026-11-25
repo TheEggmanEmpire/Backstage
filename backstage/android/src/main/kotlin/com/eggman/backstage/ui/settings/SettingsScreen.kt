@@ -264,6 +264,16 @@ private fun BackupAboutSettings(onOpenSetup: () -> Unit, onOpenLicenses: () -> U
             OutlinedButton(onClick = onOpenSetup) { Text("Setup checklist") }
             OutlinedButton(onClick = onOpenLicenses) { Text("Open-source licenses") }
         }
+        androidx.compose.foundation.Image(
+            androidx.compose.ui.res.painterResource(com.eggman.backstage.R.drawable.get_it_on_github),
+            contentDescription = "Backstage on GitHub",
+            modifier = Modifier.heightIn(max = 48.dp).clickable {
+                runCatching {
+                    context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(com.eggman.backstage.BuildConfig.SOURCE_URL))
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+            },
+        )
         Text("Desktop access", style = MaterialTheme.typography.labelLarge)
         Text("The desktop needs Stellar or Shizuku Plus.", style = MaterialTheme.typography.bodySmall)
         com.eggman.backstage.ui.components.PrivilegeManagerButtons()

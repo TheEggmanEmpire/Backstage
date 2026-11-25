@@ -17,7 +17,6 @@ import com.eggman.backstage.agent.api.Agents
 import com.eggman.backstage.data.Settings
 import com.eggman.backstage.host.DesktopHosts
 import com.eggman.backstage.privileged.PrivilegedSetup
-import org.lsposed.hiddenapibypass.HiddenApiBypass
 
 /**
  * Process bootstrap for the:backstage library (there is no Application subclass: Dextop's app
@@ -50,7 +49,7 @@ object Backstage {
         if (initialized) return
         context = appContext.applicationContext ?: appContext
         // IInputManager / IDisplayManager reflection needs hidden-API exemptions (same as Dextop).
-        runCatching { HiddenApiBypass.addHiddenApiExemptions("") }.onFailure { Log.w(TAG, "hidden api bypass failed", it) }
+        runCatching { HiddenApiAccess.exemptAll() }.onFailure { Log.w(TAG, "hidden api bypass failed", it) }
         runCatching { createChannels(context) }.onFailure { Log.w(TAG, "notification channels", it) }
         environment = AndroidAgentEnvironment(context)
         environment.settings.appVersion = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.0"

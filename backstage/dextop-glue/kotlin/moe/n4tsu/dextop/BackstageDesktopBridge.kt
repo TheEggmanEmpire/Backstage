@@ -105,7 +105,7 @@ object BackstageDesktopBridge : DesktopHost, DesktopHostExtras {
      * adds it in onServiceConnected; the agent may run before any desktop session. Process-wide and idempotent.
    */
     private val access by lazy {
-        runCatching { org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("") }
+        runCatching { HiddenApi.exempt("") }
         PrivilegedAccess(TAG)
     }
     /**

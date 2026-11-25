@@ -5,6 +5,8 @@
 - Free Auto no longer hangs on a model that does not answer: after 60 s it moves to the next model and benches the silent one for 5 minutes.
 - Requests with screenshots go to free models that accept images first. A model that rejects an image is skipped for image requests from then on, without using up a retry or being benched for text.
 - A free model whose quota is used up sits out as long as the provider asks (up to a day) instead of being retried every 10 minutes, and its long wait no longer delays switching to another model.
+- Settings → Backup & about has a **Get it on GitHub** button that opens the Backstage repository.
+- Google Play build: no built-in Wireless debugging pairing; the desktop gets its access from Stellar or Shizuku Plus.
 
 ## 1.0.4
 

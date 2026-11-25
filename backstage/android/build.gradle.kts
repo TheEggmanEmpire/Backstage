@@ -217,7 +217,7 @@ dependencies {
     // Same artifacts/versions as upstream:app (deduplicated in the merged app).
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
-    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
+    "githubImplementation"("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
 
     // on-device wake word (Apache-2.0; pulls JNA 5.18.x, Apache-2.0/LGPL dual). Models are downloaded at runtime.
     implementation("com.alphacephei:vosk-android:0.3.75")

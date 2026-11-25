@@ -1,0 +1,235 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: User <kuettner@leonard-falk.com>
+Date: Wed, 25 Nov 2026 13:43:19 +0900
+Subject: [PATCH] play-no-api-bypass
+
+---
+ android/app/build.gradle.kts                  |  4 +--
+ .../kotlin/moe/n4tsu/dextop/HiddenApi.kt      |  8 +++++
+ .../AndroidKeystorePrivateKeyStore.kt         |  0
+ .../DistributionPrivilegeBootstrap.kt         |  0
+ .../n4tsu/dextop/DisplayTopologyController.kt |  7 ++--
+ .../kotlin/moe/n4tsu/dextop/MirrorService.kt  |  3 +-
+ .../n4tsu/dextop/linux/LinuxServiceHost.kt    |  6 ++--
+ .../privilege/EmbeddedPrivilegeServer.kt      |  4 +--
+ .../play/kotlin/moe/n4tsu/dextop/HiddenApi.kt | 10 ++++++
+ .../DistributionPrivilegeBootstrap.kt         | 34 +++++++++++++++++++
+ 10 files changed, 63 insertions(+), 13 deletions(-)
+ create mode 100644 android/app/src/github/kotlin/moe/n4tsu/dextop/HiddenApi.kt
+ rename android/app/src/{main => github}/kotlin/moe/n4tsu/dextop/privilege/AndroidKeystorePrivateKeyStore.kt (100%)
+ rename android/app/src/{main => github}/kotlin/moe/n4tsu/dextop/privilege/DistributionPrivilegeBootstrap.kt (100%)
+ create mode 100644 android/app/src/play/kotlin/moe/n4tsu/dextop/HiddenApi.kt
+ create mode 100644 android/app/src/play/kotlin/moe/n4tsu/dextop/privilege/DistributionPrivilegeBootstrap.kt
+
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index 364140f60fd4b9849038aad9508ed302fc54411f..5501185a89d7610c8a070716e80c495ec62c9739 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -181,12 +181,12 @@ dependencies {
+     implementation("androidx.media3:media3-muxer:1.10.1")
+     implementation("dev.rikka.shizuku:api:13.1.5")
+     implementation("dev.rikka.shizuku:provider:13.1.5")
+-    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
++    "githubImplementation"("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
+     // Decompresses Linux container root filesystems (rootfs.tar.xz).
+     implementation("org.tukaani:xz:1.10")
+     implementation("org.apache.commons:commons-compress:1.28.0")
+     // 2.1.1 is the newest Kadb line compatible with this project's compileSdk 36.
+-    implementation("com.flyfishxu:kadb:2.1.1")
++    "githubImplementation"("com.flyfishxu:kadb:2.1.1")
+     // Signs the generated home-screen launchers of Linux applications on the device.
+     implementation("com.android.tools.build:apksig:8.11.1")
+     // Reads winget package manifests (YAML) for the Store's Windows applications.
+diff --git a/android/app/src/github/kotlin/moe/n4tsu/dextop/HiddenApi.kt b/android/app/src/github/kotlin/moe/n4tsu/dextop/HiddenApi.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..2880ef34389acc4d239e8f68a1460ba5c5e324a8
+--- /dev/null
++++ b/android/app/src/github/kotlin/moe/n4tsu/dextop/HiddenApi.kt
+@@ -0,0 +1,8 @@
++package moe.n4tsu.dextop
++
++import org.lsposed.hiddenapibypass.HiddenApiBypass
++
++/** Hidden-API exemptions for this process (classes whose descriptors start with one of [prefixes]; "" = all). */
++object HiddenApi {
++    fun exempt(vararg prefixes: String): Boolean = HiddenApiBypass.addHiddenApiExemptions(*prefixes)
++}
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/AndroidKeystorePrivateKeyStore.kt b/android/app/src/github/kotlin/moe/n4tsu/dextop/privilege/AndroidKeystorePrivateKeyStore.kt
+similarity index 100%
+rename from android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/AndroidKeystorePrivateKeyStore.kt
+rename to android/app/src/github/kotlin/moe/n4tsu/dextop/privilege/AndroidKeystorePrivateKeyStore.kt
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/DistributionPrivilegeBootstrap.kt b/android/app/src/github/kotlin/moe/n4tsu/dextop/privilege/DistributionPrivilegeBootstrap.kt
+similarity index 100%
+rename from android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/DistributionPrivilegeBootstrap.kt
+rename to android/app/src/github/kotlin/moe/n4tsu/dextop/privilege/DistributionPrivilegeBootstrap.kt
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/DisplayTopologyController.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/DisplayTopologyController.kt
+index 68198e0cab323760ed91e21f764a55e9714364f7..ac28d332342e79b570d336e41199755779fe9b3d 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/DisplayTopologyController.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/DisplayTopologyController.kt
+@@ -12,7 +12,6 @@ import moe.n4tsu.dextop.privilege.DistributionPrivilegeRuntime
+ import org.json.JSONObject
+ import rikka.shizuku.ShizukuBinderWrapper
+ import rikka.shizuku.SystemServiceHelper
+-import org.lsposed.hiddenapibypass.HiddenApiBypass
+ import kotlin.math.hypot
+ 
+ /** Privileged bridge for Android's hidden multi-display topology API. */
+@@ -499,8 +498,8 @@ class DisplayTopologyController(private val context: Context) {
+ 
+     private fun resolveTransactionCodes(): TransactionCodes? = runCatching {
+         // The Stub fields are hidden on Android, but this app already ships
+-        // HiddenApiBypass for the other privileged display/input bridges.
+-        HiddenApiBypass.addHiddenApiExemptions("")
++        // hidden-API exemptions for the other privileged display/input bridges.
++        HiddenApi.exempt("")
+         val stub = Class.forName("$DISPLAY_INTERFACE\$Stub")
+         fun read(name: String): Int = stub.getDeclaredField(name).run {
+             isAccessible = true
+@@ -645,7 +644,7 @@ class DisplayTopologyController(private val context: Context) {
+          */
+         private val DP_NODES: Boolean by lazy {
+             runCatching {
+-                HiddenApiBypass.addHiddenApiExemptions("")
++                HiddenApi.exempt("")
+                 Class.forName("android.hardware.display.DisplayTopology\$TreeNode")
+                     .getDeclaredField("mWidth").type == Float::class.javaPrimitiveType
+             }.getOrDefault(false)
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/MirrorService.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/MirrorService.kt
+index 4c4dafb5a2d3a8960482d98854fff19cdbcbe4d4..ba549a55fb8280c538c422f65066ea3a7d2c890e 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/MirrorService.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/MirrorService.kt
+@@ -121,7 +121,6 @@ import kotlin.math.min
+ import kotlin.math.roundToInt
+ import org.json.JSONArray
+ import org.json.JSONObject
+-import org.lsposed.hiddenapibypass.HiddenApiBypass
+ 
+ class MirrorService : AccessibilityService(), SurfaceHolder.Callback {
+     // region Backstage presentation (patch 0001-mirrorservice-presentation) -----------------------------------
+@@ -4093,7 +4092,7 @@ class MirrorService : AccessibilityService(), SurfaceHolder.Callback {
+             Log.w(logTag, "Ignoring accessibility connection delivered after service destruction")
+             return
+         }
+-        HiddenApiBypass.addHiddenApiExemptions("")
++        HiddenApi.exempt("")
+         // These preferences belonged to the removed DPI/acceleration
+         // controls. Clear them here as well as in Flutter startup because the
+         // accessibility service can be started directly by an overlay.
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHost.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHost.kt
+index 5754cf0b4d00fd0c3a303435e0bf72470ba8b6f1..c48663f5fc598cf233096935bfc6e32fd59641f9 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHost.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/linux/LinuxServiceHost.kt
+@@ -1,10 +1,10 @@
+ package moe.n4tsu.dextop.linux
+ 
++import moe.n4tsu.dextop.HiddenApi
+ import android.os.Handler
+ import android.os.Looper
+ import androidx.annotation.Keep
+ import moe.n4tsu.dextop.privilege.EmbeddedPrivilegeServer
+-import org.lsposed.hiddenapibypass.HiddenApiBypass
+ import java.io.File
+ 
+ /** Linux's private shell daemon, launched by Dextop's built-in access runtime. */
+@@ -39,7 +39,7 @@ object LinuxServiceHost {
+         bindHost(packageName)
+         System.setProperty(LIBRARY_PROPERTY, File(nativeDirectory, "libdextop_linux.so").absolutePath)
+         Looper.prepareMainLooper()
+-        HiddenApiBypass.addHiddenApiExemptions("Landroid/app/", "Landroid/content/", "Landroid/os/",
++        HiddenApi.exempt("Landroid/app/", "Landroid/content/", "Landroid/os/",
+             "Landroid/graphics/", "Landroid/text/", "Lcom/android/internal/graphics/fonts/")
+         initializeFonts()
+         val service = LinuxContainerService()
+@@ -76,7 +76,7 @@ object LinuxServiceHost {
+     @Synchronized
+     internal fun initializeFonts() {
+         if (fontsInitialized) return
+-        HiddenApiBypass.addHiddenApiExemptions("Landroid/os/", "Landroid/graphics/",
++        HiddenApi.exempt("Landroid/os/", "Landroid/graphics/",
+             "Landroid/text/", "Lcom/android/internal/graphics/fonts/")
+         runCatching {
+             val binder = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java)
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedPrivilegeServer.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedPrivilegeServer.kt
+index 5a9953fc9bf9d3d042c99da2a45120bdbd9bb66b..ab770f0003ee5c2a1821b22042a2fc9dc101dfcd 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedPrivilegeServer.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/privilege/EmbeddedPrivilegeServer.kt
+@@ -1,5 +1,6 @@
+ package moe.n4tsu.dextop.privilege
+ 
++import moe.n4tsu.dextop.HiddenApi
+ import android.content.AttributionSource
+ import android.net.Uri
+ import android.os.Binder
+@@ -9,7 +10,6 @@ import android.os.Looper
+ import android.os.Parcel
+ import moe.n4tsu.dextop.input.PrivilegedInputService
+ import java.io.File
+-import org.lsposed.hiddenapibypass.HiddenApiBypass
+ 
+ /** Minimal bundled ADB process. It exposes no package-management UI or third-party API. */
+ object EmbeddedPrivilegeServer {
+@@ -27,7 +27,7 @@ object EmbeddedPrivilegeServer {
+             while (File(apk).exists()) Thread.sleep(5_000L)
+             kotlin.system.exitProcess(0)
+         }, "DextopApkWatch").apply { isDaemon = true }.start()
+-        HiddenApiBypass.addHiddenApiExemptions("Landroid/app/", "Landroid/content/", "Landroid/os/", "Landroid/window/")
++        HiddenApi.exempt("Landroid/app/", "Landroid/content/", "Landroid/os/", "Landroid/window/")
+         val server = RuntimeBinder()
+         val handler = Handler(Looper.getMainLooper())
+         lateinit var publishAndWatch: () -> Unit
+diff --git a/android/app/src/play/kotlin/moe/n4tsu/dextop/HiddenApi.kt b/android/app/src/play/kotlin/moe/n4tsu/dextop/HiddenApi.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..79318e92a6c6dbc77b2c72c5ca80edc901225a9d
+--- /dev/null
++++ b/android/app/src/play/kotlin/moe/n4tsu/dextop/HiddenApi.kt
+@@ -0,0 +1,10 @@
++package moe.n4tsu.dextop
++
++/**
++ * The Google Play build ships no API-bypass library: hidden APIs stay subject to the platform's normal policy,
++ * so calls that need one fail and take their existing fallback.
++ */
++object HiddenApi {
++    @Suppress("UNUSED_PARAMETER")
++    fun exempt(vararg prefixes: String): Boolean = false
++}
+diff --git a/android/app/src/play/kotlin/moe/n4tsu/dextop/privilege/DistributionPrivilegeBootstrap.kt b/android/app/src/play/kotlin/moe/n4tsu/dextop/privilege/DistributionPrivilegeBootstrap.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..f4c2e8d28c5a5b9fa4a1cf62c0d630303edafb98
+--- /dev/null
++++ b/android/app/src/play/kotlin/moe/n4tsu/dextop/privilege/DistributionPrivilegeBootstrap.kt
+@@ -0,0 +1,34 @@
++package moe.n4tsu.dextop.privilege
++
++import android.content.Context
++
++/**
++ * The Google Play build has no built-in Wireless debugging pairing: privilege comes from an external
++ * Shizuku-compatible provider (Stellar, Shizuku Plus). A privileged runtime that is already running is still used.
++ */
++object DistributionPrivilegeBootstrap : EmbeddedPrivilegeContract {
++    override val included: Boolean = false
++
++    private const val UNAVAILABLE = "Wireless debugging pairing is not part of this build; use Stellar or Shizuku Plus."
++
++    fun hasStoredPairing(context: Context): Boolean = false
++
++    fun showPairingNotification(context: Context) = Unit
++
++    fun beginPairingDiscovery(context: Context) = Unit
++
++    fun dismissPairingNotification(context: Context) = Unit
++
++    fun cancelPairingDiscovery() = Unit
++
++    fun pairingState(): String = EmbeddedPairingNotification.state
++
++    override suspend fun pair(context: Context, code: String): EmbeddedPrivilegeContract.PairingResult =
++        EmbeddedPrivilegeContract.PairingResult(paired = false, detail = UNAVAILABLE)
++
++    suspend fun canConnect(context: Context): Boolean = false
++
++    override suspend fun connectAndStart(context: Context): EmbeddedPrivilegeContract.StartResult =
++        if (DistributionPrivilegeRuntime.available) EmbeddedPrivilegeContract.StartResult(started = true)
++        else EmbeddedPrivilegeContract.StartResult(started = false, detail = UNAVAILABLE)
++}
