@@ -7,6 +7,7 @@
 - A free model whose quota is used up sits out as long as the provider asks (up to a day) instead of being retried every 10 minutes, and its long wait no longer delays switching to another model.
 - Settings → Backup & about has a **Get it on GitHub** button that opens the Backstage repository.
 - Google Play build: no built-in Wireless debugging pairing; the desktop gets its access from Stellar or Shizuku Plus.
+- Fixed the wake word's **Resume** notification after a restart on Android 15 and later.
 
 ## 1.0.4
 

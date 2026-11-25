@@ -107,11 +107,11 @@ object WakeWord {
             "Tap Resume to listen for \"${SettingsStores.get(app).wakePhrase}\" again.", action = "Resume")
     }
 
-    /** A visible (not minimised) notification whose button restarts listening; tapping it is a user interaction. */
+    /** A visible (not minimised) notification whose button restarts listening through [WakeWordResumeActivity]. */
     fun notifyRearm(context: Context, title: String, text: String, action: String = "Retry") {
         val app = context.applicationContext
-        val resume = PendingIntent.getForegroundService(
-            app, 7, Intent(app, WakeWordService::class.java),
+        val resume = PendingIntent.getActivity(
+            app, 7, Intent(app, WakeWordResumeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         app.getSystemService(android.app.NotificationManager::class.java)?.notify(

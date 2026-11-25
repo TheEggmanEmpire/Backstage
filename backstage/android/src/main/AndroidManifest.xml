@@ -374,6 +374,13 @@
         </service>
 
         <!-- Wake word: microphone foreground service (needs only its notification) -->
+        <activity
+            android:name="com.eggman.backstage.voice.WakeWordResumeActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <service
             android:name="com.eggman.backstage.voice.WakeWordService"
             android:exported="false"

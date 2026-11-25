@@ -35,10 +35,10 @@ class IconResourcesTest {
         assertTrue(sources.size > 50)
         val robots = sources.filter { it.readText().contains("SmartToy") }
         assertTrue("robot glyph in ${robots.map { it.name }}", robots.isEmpty())
-        // The home-screen widgets show the app icon; every drawable reference in Kotlin points at a Backstage icon.
+        // The home-screen widgets show the app icon; every drawable reference in Kotlin points at a Backstage icon or the GitHub badge.
         assertTrue(File(main, "res/layout/bs_widget_button.xml").readText().contains("@drawable/bs_ic_launcher_round"))
         val refs = sources.flatMap { f -> Regex("R\\.drawable\\.(\\w+)").findAll(f.readText()).map { it.groupValues[1] }.toList() }.toSet()
-        assertEquals(setOf("bs_ic_agent", "bs_ic_launcher_round", "bs_nav_penguin", "bs_nav_penguin_filled"), refs)
+        assertEquals(setOf("bs_ic_agent", "bs_ic_launcher_round", "bs_nav_penguin", "bs_nav_penguin_filled", "get_it_on_github"), refs)
     }
 
     /**

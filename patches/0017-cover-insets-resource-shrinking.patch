@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: User <kuettner@leonard-falk.com>
+Date: Wed, 25 Nov 2026 14:00:54 +0900
+Subject: [PATCH] cover-insets-resource-shrinking
+
+---
+ .../n4tsu/dextop/CoverBackButtonsActivity.kt   | 18 +++++++-----------
+ .../moe/n4tsu/dextop/CoverTrackpadActivity.kt  | 14 +++++++-------
+ android/gradle.properties                      |  2 ++
+ 3 files changed, 16 insertions(+), 18 deletions(-)
+
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/CoverBackButtonsActivity.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/CoverBackButtonsActivity.kt
+index 0012b149e6230d2388f0863cec929daee5df3c0b..f867d55990cba11d9587e80defe1365a06d1fb07 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/CoverBackButtonsActivity.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/CoverBackButtonsActivity.kt
+@@ -6,7 +6,8 @@ import android.graphics.drawable.GradientDrawable
+ import android.os.Bundle
+ import android.view.Gravity
+ import android.view.MotionEvent
+-import android.view.View
++import android.view.WindowInsets
++import android.view.WindowInsetsController
+ import android.widget.GridLayout
+ import android.widget.LinearLayout
+ import android.widget.TextView
+@@ -32,16 +33,11 @@ class CoverBackButtonsActivity : Activity() {
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
+         instance = this
+-        window.setStatusBarColor(Color.BLACK)
+-        window.setNavigationBarColor(Color.BLACK)
+-        window.decorView.systemUiVisibility = (
+-                View.SYSTEM_UI_FLAG_FULLSCREEN or
+-                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+-                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+-                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+-                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+-                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+-                )
++        window.setDecorFitsSystemWindows(false)
++        window.insetsController?.let {
++            it.hide(WindowInsets.Type.systemBars())
++            it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
++        }
+ 
+         val root = LinearLayout(this).apply {
+             orientation = LinearLayout.VERTICAL
+diff --git a/android/app/src/main/kotlin/moe/n4tsu/dextop/CoverTrackpadActivity.kt b/android/app/src/main/kotlin/moe/n4tsu/dextop/CoverTrackpadActivity.kt
+index a41c5f5d88bf87e63e458915f0fe9048a8678665..2247661511046eaa7e5c5daf7569abff5fe3bfc8 100644
+--- a/android/app/src/main/kotlin/moe/n4tsu/dextop/CoverTrackpadActivity.kt
++++ b/android/app/src/main/kotlin/moe/n4tsu/dextop/CoverTrackpadActivity.kt
+@@ -5,6 +5,8 @@ import android.graphics.Color
+ import android.os.Bundle
+ import android.view.Gravity
+ import android.view.View
++import android.view.WindowInsets
++import android.view.WindowInsetsController
+ import android.widget.FrameLayout
+ import android.widget.TextView
+ 
+@@ -25,13 +27,11 @@ class CoverTrackpadActivity : Activity() {
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
+         instance = this
+-        window.statusBarColor = Color.BLACK
+-        window.navigationBarColor = Color.BLACK
+-        window.decorView.systemUiVisibility = (
+-                View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+-                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+-                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+-                )
++        window.setDecorFitsSystemWindows(false)
++        window.insetsController?.let {
++            it.hide(WindowInsets.Type.systemBars())
++            it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
++        }
+         trackpadSurface = FrameLayout(this).apply {
+             setBackgroundColor(Color.rgb(18, 18, 22))
+             addView(TextView(this@CoverTrackpadActivity).apply {
+diff --git a/android/gradle.properties b/android/gradle.properties
+index d5da7278a40014e65942e5d8878a8f30eb56b3a0..d8a05a0d16e613a226215856c7a14fe5c6ed83a8 100644
+--- a/android/gradle.properties
++++ b/android/gradle.properties
+@@ -4,3 +4,5 @@ android.useAndroidX=true
+ android.builtInKotlin=false
+ # This newDsl flag was added automatically by Flutter migrator
+ android.newDsl=false
++# Shrinks resources together with code (R8), dropping resources only unreachable code references.
++android.r8.optimizedResourceShrinking=true
