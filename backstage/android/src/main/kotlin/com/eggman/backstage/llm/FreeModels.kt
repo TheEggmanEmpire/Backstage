@@ -3,6 +3,7 @@ package com.eggman.backstage.llm
 import com.eggman.backstage.data.ModelInfo
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.ln
 import kotlin.math.roundToLong
@@ -163,25 +164,42 @@ object FreeModels {
     val cooldown = ConcurrentHashMap<String, Long>()
     const val COOLDOWN_MS = 60_000L
 
+    /** Free Auto gives each model this long to answer before moving on; a stalled model sits out [STALL_COOLDOWN_MS]. */
+    const val STALL_MS = 60_000L
+    const val STALL_COOLDOWN_MS = 5 * 60_000L
+
+    /** Longest a rate-limited model sits out; an exhausted anonymous quota answers with a retry-after of weeks. */
+    const val MAX_RATE_LIMIT_COOLDOWN_MS = 24 * 60 * 60_000L
+
+    /** Models that rejected a request with images; image requests skip them for the rest of the process. */
+    val rejectsImages: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** A 400/404/415/422 on a request with images: the model (or every endpoint behind it) takes text only. */
+    fun isImageRejection(e: LlmException): Boolean =
+        e.httpCode in setOf(400, 404, 415, 422) && e.kind != LlmErrorKind.CONTEXT_LENGTH
+
     /** How long a model sits out after [e]; null = not at all (the next request may use it again). */
     fun cooldownFor(e: LlmException): Long? = when {
-        e.kind == LlmErrorKind.RATE_LIMIT || e.httpCode == 429 -> (e.retryAfterMs ?: COOLDOWN_MS).coerceIn(1_000, 10 * 60_000)
+        e.kind == LlmErrorKind.RATE_LIMIT || e.httpCode == 429 -> (e.retryAfterMs ?: COOLDOWN_MS).coerceIn(1_000, MAX_RATE_LIMIT_COOLDOWN_MS)
         e.kind == LlmErrorKind.NOT_FOUND || e.httpCode == 404 || e.httpCode == 410 -> 30 * 60_000L
-        e.kind in setOf(LlmErrorKind.TIMEOUT, LlmErrorKind.SERVER, LlmErrorKind.OVERLOADED, LlmErrorKind.NETWORK) -> COOLDOWN_MS
+        e.kind == LlmErrorKind.TIMEOUT -> STALL_COOLDOWN_MS
+        e.kind in setOf(LlmErrorKind.SERVER, LlmErrorKind.OVERLOADED, LlmErrorKind.NETWORK) -> COOLDOWN_MS
         else -> null
     }
 }
 
 /**
- * Free Auto: tries [candidates] best first. Any failure moves on to the next model, up to [FreeModels.RETRIES]
- * times; the last failure is thrown for the normal retry and error handling. Requests carrying images skip
- * models known to be text only (unless only those are left). The reply's [LlmReply.model] names the model
+ * Free Auto: tries [candidates] best first. Any failure, or no answer within [stallMs], moves on to the next
+ * model, up to [FreeModels.RETRIES] times; the last failure is thrown for the normal retry and error handling.
+ * Requests carrying images go to models known to take images first, skip models known (or found) to be text
+ * only, and a model's image rejection does not use up a retry. The reply's [LlmReply.model] names the model
  * that answered.
  */
 class FreeAutoClient(
     private val candidates: List<FreeModels.Candidate>,
     private val vision: Boolean,
     private val clientFor: (FreeModels.Candidate, Boolean) -> LlmClient,
+    private val stallMs: Long = FreeModels.STALL_MS,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : LlmClient {
     override val provider: ProviderId = ProviderId.FREE
@@ -194,27 +212,41 @@ class FreeAutoClient(
     override suspend fun complete(request: LlmRequest): LlmReply {
         if (candidates.isEmpty()) throw LlmException(LlmErrorKind.CONFIG, "No free models are enabled (Settings → AI provider → Free models).")
         val images = vision && request.messages.any { it.hasImage }
-        val usable = candidates.filter { !(images && it.vision == false) }.ifEmpty { candidates }
+        val usable = if (!images) candidates else candidates
+            .filter { it.vision != false && it.id !in FreeModels.rejectsImages }
+            .sortedBy { if (it.vision == true) 0 else 1 }
+            .ifEmpty { candidates }
         val now = clock()
         val ready = usable.filter { (FreeModels.cooldown[it.id] ?: 0) <= now }
             // All cooling down: the ones that free up first.
             .ifEmpty { usable.sortedBy { FreeModels.cooldown[it.id] ?: 0 } }
         var last: LlmException? = null
-        for (c in ready.take(FreeModels.RETRIES + 1)) {
+        var failures = 0
+        for (c in ready) {
+            if (failures > FreeModels.RETRIES) break
             try {
-                val reply = clientFor(c, vision && c.vision != false).complete(request)
+                val reply = withTimeoutOrNull(stallMs) { clientFor(c, images && c.vision != false).complete(request) }
+                    ?: throw LlmException(LlmErrorKind.TIMEOUT, "${FreeModels.displayName(c.id)} did not answer within ${stallMs / 1000} s")
                 served = c.id
                 return reply.copy(model = c.id)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: LlmException) {
-                FreeModels.cooldownFor(e)?.let { FreeModels.cooldown[c.id] = clock() + it }
+                if (images && FreeModels.isImageRejection(e)) {
+                    FreeModels.rejectsImages += c.id
+                } else {
+                    FreeModels.cooldownFor(e)?.let { FreeModels.cooldown[c.id] = clock() + it }
+                    failures++
+                }
                 last = e
             } catch (e: Exception) {
                 FreeModels.cooldown[c.id] = clock() + FreeModels.COOLDOWN_MS
                 last = LlmException(LlmErrorKind.NETWORK, e.message ?: e.javaClass.simpleName, cause = e)
+                failures++
             }
         }
-        throw last!!
+        // The next model may be ready at once: a long retry-after from one model must not hold up the retry.
+        val e = last!!
+        throw LlmException(e.kind, e.message.orEmpty(), e.httpCode, retryAfterMs = null, cause = e.cause ?: e)
     }
 }

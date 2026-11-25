@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.5
+
+- Free Auto no longer hangs on a model that does not answer: after 60 s it moves to the next model and benches the silent one for 5 minutes.
+- Requests with screenshots go to free models that accept images first. A model that rejects an image is skipped for image requests from then on, without using up a retry or being benched for text.
+- A free model whose quota is used up sits out as long as the provider asks (up to a day) instead of being retried every 10 minutes, and its long wait no longer delays switching to another model.
+
 ## 1.0.4
 
 - New **Free models** provider: free models from KiloCode and OVHcloud, no account or key. It can be switched off in Settings → AI provider. These providers may log prompts and use them for training.

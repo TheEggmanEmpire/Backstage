@@ -14,7 +14,7 @@ import org.junit.Before
 import org.junit.Test
 
 class FreeModelsTest {
-    @Before fun clearCooldowns() = FreeModels.cooldown.clear()
+    @Before fun clearCooldowns() { FreeModels.cooldown.clear(); FreeModels.rejectsImages.clear() }
 
     private val caps = mapOf(
         "ovh/DeepSeek-V4.1-Flash-1017" to FreeModels.Caps(1_048_576, null),
@@ -103,6 +103,41 @@ class FreeModelsTest {
         val e = runCatching { auto.complete(LlmRequest("", listOf(Message.user("hi")))) }.exceptionOrNull() as LlmException
         assertEquals("bad 4", e.message)
         assertEquals(4, fakes.values.sumOf { it.calls })
+    }
+
+    @Test fun freeAutoSkipsAStalledModelAndBenchesIt() = runBlocking {
+        val stalled = object : LlmClient {
+            override val provider = Provider.FREE
+            override val model = "slow"
+            override suspend fun complete(request: LlmRequest): LlmReply = kotlinx.coroutines.awaitCancellation()
+        }
+        val ok = Fake("fast", null)
+        val now = 5_000_000L
+        val auto = FreeAutoClient(listOf(cand("slow"), cand("fast")), false, { c, _ -> if (c.id == "slow") stalled else ok }, clock = { now }, stallMs = 50)
+        assertEquals("fast", auto.complete(LlmRequest("", listOf(Message.user("hi")))).model)
+        assertEquals(now + FreeModels.STALL_COOLDOWN_MS, FreeModels.cooldown["slow"])
+    }
+
+    @Test fun imageRejectionsDoNotUseUpRetriesAndAreRemembered() = runBlocking {
+        val rejects = (1..5).associate { "t$it" to Fake("t$it", LlmException(LlmErrorKind.BAD_REQUEST, "text only", 400)) }
+        val eyes = Fake("eyes", null)
+        val all = rejects + ("eyes" to eyes)
+        val auto = FreeAutoClient(rejects.keys.map { cand(it) } + cand("eyes"), true, { c, _ -> all.getValue(c.id) })
+        val withImage = Message(Role.USER, listOf(Part.Text("look"), Part.Image("AAAA")))
+        assertEquals("eyes", auto.complete(LlmRequest("", listOf(withImage))).model)
+        assertTrue(FreeModels.rejectsImages.containsAll(rejects.keys))
+        assertTrue("text-only models are not benched for text", FreeModels.cooldown.isEmpty())
+        auto.complete(LlmRequest("", listOf(withImage)))
+        assertEquals(1, rejects.values.sumOf { it.calls } / 5)
+    }
+
+    @Test fun exhaustedQuotaSitsOutLongButDoesNotDelayTheRetry() = runBlocking {
+        val now = 1_000L
+        val spent = Fake("spent", LlmException(LlmErrorKind.RATE_LIMIT, "429", 429, retryAfterMs = 37L * 24 * 3_600_000))
+        val auto = FreeAutoClient(listOf(cand("spent")), false, { _, _ -> spent }, clock = { now })
+        val e = runCatching { auto.complete(LlmRequest("", listOf(Message.user("hi")))) }.exceptionOrNull() as LlmException
+        assertEquals(now + FreeModels.MAX_RATE_LIMIT_COOLDOWN_MS, FreeModels.cooldown["spent"])
+        assertNull(e.retryAfterMs)
     }
 
     @Test fun quotaWorded429StillCoolsTheModelDown() {

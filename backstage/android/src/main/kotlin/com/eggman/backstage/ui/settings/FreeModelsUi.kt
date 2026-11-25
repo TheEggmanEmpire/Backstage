@@ -69,7 +69,9 @@ internal fun FreeModelsBox(store: BackstageSettingsStore) {
     Text("Score = intelligence + context (2 per doubling above 32K, max 10) + 5 for vision. Intelligence scores ship with each " +
         "app update (Artificial Analysis Intelligence Index, ${FreeModels.INTEL_AS_OF}); a model without one is placed at the median, " +
         "so context and vision decide. A failed request moves on to the next model, up to ${FreeModels.RETRIES} times. Requests with " +
-        "screenshots skip text-only models. A rate-limited model sits out for a minute (or as long as the server asks).",
+        "screenshots go to vision models first and skip text-only ones. A model that does not answer within " +
+        "${FreeModels.STALL_MS / 1000} s is skipped and sits out 5 minutes; a rate-limited one sits out a minute, or as long as " +
+        "the server asks (up to a day).",
         style = MaterialTheme.typography.bodySmall)
     if (order.isEmpty()) Text("Enable at least one free model below.", style = MaterialTheme.typography.bodySmall)
     order.forEachIndexed { i, c ->
